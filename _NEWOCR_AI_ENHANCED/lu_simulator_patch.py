@@ -973,20 +973,10 @@ def _sim_open_risk_ranges_dialog(self):
                        highlightbackground=_BORDER_MID, highlightthickness=1)
         row.pack(fill="x", pady=4)
 
-        # Badge
-        badge = tk.Frame(row, bg=badge_color, width=70)
+        # Badge strip (colored left border)
+        badge = tk.Frame(row, bg=badge_color, width=12)
         badge.pack(side="left", fill="y")
         badge.pack_propagate(False)
-        tk.Label(
-            badge,
-            text=risk,
-            font=F(9, "bold"),
-            fg=badge_color if risk == "LOW" else badge_color,
-            bg=row_bg,
-            anchor="center",
-        ).pack(expand=True)
-        # Re-apply correct bg
-        badge.configure(bg=row_bg)
 
         # Risk label as colored text
         tk.Label(
@@ -1054,7 +1044,15 @@ def _sim_open_risk_ranges_dialog(self):
     def _validate(*_args):
         """
         Parse all fields, detect overlaps, and update warn_lbl.
-        Returns (ranges_dict, error_msg) — error_msg is "" if valid.
+        Returns (ranges_dict, errors_list) — errors_list is [] if valid.
+
+        Overlap rule: two inclusive ranges [lo1, hi1] and [lo2, hi2] overlap
+        only when a value can belong to BOTH simultaneously.  Adjacent ranges
+        like LOW(1–35) / MEDIUM(36–70) share no common value, so they are
+        NOT treated as overlapping.  The test is:
+            lo1 < hi2  AND  lo2 < hi1   (strict on both sides)
+        For the HIGH range hi is ∞, so HIGH always overlaps anything whose
+        lo < ∞ — but HIGH's lo is checked against the other ranges' hi values.
         """
         errors = []
         parsed: dict[str, tuple] = {}
@@ -1077,26 +1075,30 @@ def _sim_open_risk_ranges_dialog(self):
             parsed[risk] = (lo, hi)
 
         if not errors and len(parsed) == 3:
-            # Skip overlap check if any field is currently empty (user is mid-edit).
+            # Skip overlap check if any required field is still empty (user is mid-edit).
+            # HIGH's max is intentionally empty (open-ended), so skip it in this check.
             all_filled = all(
-                fd["min"].get().strip() and (fd["max"] is None or fd["max"].get().strip())
-                for fd in fields.values()
+                fd["min"].get().strip() and (
+                    risk == "HIGH" or fd["max"] is None or fd["max"].get().strip()
+                )
+                for risk, fd in fields.items()
             )
             if not all_filled:
                 return None, []
-            # Check for overlaps using boundary-point comparison only (no looping).
-            # For each pair of ranges, check if their intervals overlap.
+
+            # Overlap check: two ranges share a value only when lo1 < hi2 AND lo2 < hi1
+            # (strict inequalities so adjacent boundaries like 35 / 36 are allowed).
             overlap_msgs = []
-            range_items = list(parsed.items())  # [("LOW", (lo, hi)), ...]
+            range_items = list(parsed.items())
             for i in range(len(range_items)):
                 for j in range(i + 1, len(range_items)):
                     r1, (lo1, hi1) = range_items[i]
                     r2, (lo2, hi2) = range_items[j]
-                    hi1_cmp = hi1 if hi1 != float("inf") else float("inf")
-                    hi2_cmp = hi2 if hi2 != float("inf") else float("inf")
-                    # Two ranges [lo1,hi1] and [lo2,hi2] overlap if lo1 <= hi2 and lo2 <= hi1
-                    if lo1 <= hi2_cmp and lo2 <= hi1_cmp:
-                        msg = f"Overlap: {r1} ({lo1}–{'∞' if hi1==float('inf') else hi1}%) and {r2} ({lo2}–{'∞' if hi2==float('inf') else hi2}%) overlap."
+                    # Use strict < so adjacent non-overlapping ranges pass.
+                    if lo1 < hi2 and lo2 < hi1:
+                        def _fmt_r(lo, hi):
+                            return f"{lo:.0f}%–{'∞' if hi == float('inf') else f'{hi:.0f}%'}"
+                        msg = f"Overlap: {r1} ({_fmt_r(lo1, hi1)}) and {r2} ({_fmt_r(lo2, hi2)}) share values — fix the boundaries so no percentage belongs to two levels."
                         if msg not in overlap_msgs:
                             overlap_msgs.append(msg)
             if overlap_msgs:
@@ -1144,9 +1146,23 @@ def _sim_open_risk_ranges_dialog(self):
 
     # ── Apply ─────────────────────────────────────────────────────────
     def _apply_and_close():
+        # Cancel any pending debounce so we validate with the latest values.
+        if _debounce_job[0] is not None:
+            try:
+                dialog.after_cancel(_debounce_job[0])
+            except Exception:
+                pass
+            _debounce_job[0] = None
+
         parsed, errors = _validate()
         if errors:
-            return   # keep dialog open, warning already shown
+            # Warning already shown by _validate — keep dialog open.
+            return
+        if parsed is None:
+            warn_var.set("⚠  Please fill in all fields before applying.")
+            warn_lbl.pack(fill="x", padx=16, pady=(2, 4), before=rows_frame)
+            return
+
         self._sim_risk_ranges = parsed
         _sim_populate(self)
         dialog.destroy()
@@ -1970,9 +1986,8 @@ def _sim_refresh_client_table(self):
         rows.append(r)
         self._sim_client_metrics_by_name[name] = r
 
-    # Highest risk first, then largest amort ratio.
-    risk_order = {"HIGH": 0, "MEDIUM": 1, "LOW": 2}
-    rows.sort(key=lambda r: (risk_order.get(r["sim_risk_label"], 9), -(r["pct_net_to_amort"] or 0.0)))
+    # Sort by highest % Net → Amort first (descending).
+    rows.sort(key=lambda r: -(r["pct_net_to_amort"] or 0.0))
 
     total = len(rows)
     max_page = max(0, (total - 1) // SIM_CLIENT_PAGE_SIZE) if total else 0
@@ -2311,6 +2326,570 @@ def _sim_show_client_details(self, client_name: str):
     tk.Frame(detail, bg=_CARD_WHITE, height=24).pack(fill="x")
 
 
+def _sim_write_export_settings_sheet(ws, *, self_app, fname, generated_at, exported_by, export_scope_note):
+    """
+    Write a rich "Export settings" sheet that mirrors the on-screen layout in the
+    screenshot — plus two new sections specific to the Risk Simulator:
+
+      • Expense modifications  — every expense item whose slider ≠ 0, shown as
+                                  "Fuel and Transportation — +33% increase"
+      • Industry checklist     — which industries were active in the simulator filter
+    """
+    try:
+        import openpyxl
+        from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
+        from openpyxl.utils import get_column_letter
+    except ImportError:
+        return   # silent — caller will catch missing openpyxl separately
+
+    # ── Palette (matches the navy theme in the screenshot) ────────────
+    _NAV  = "1A3A5C"   # deep navy section banners
+    _WHT  = "FFFFFF"
+    _HDR_BG = "EAF2FB"  # light blue sub-header
+    _HDR_FG = "1A3A5C"
+    _ROW_ODD  = "FFFFFF"
+    _ROW_EVEN = "F4F8FD"
+    _LBL_FG   = "1A3A5C"   # bold label text
+    _VAL_FG   = "374151"   # regular value text
+    _NONE_FG  = "9CA3AF"   # grey for "— None —" placeholders
+    _MOD_POS  = "1E8449"   # green for positive % changes
+    _MOD_NEG  = "C0392B"   # red  for negative % changes
+    _BORDER   = "D5DCE4"
+
+    _thin  = Side(border_style="thin",   color=_BORDER)
+    _med   = Side(border_style="medium", color=_NAV)
+    _grid  = Border(left=_thin, right=_thin, top=_thin, bottom=_thin)
+    _bot_m = Border(left=_thin, right=_thin, top=_thin, bottom=_med)
+
+    COL_A = 1   # label column
+    COL_B = 2   # value column
+    W_A   = 30  # label column width
+    W_B   = 90  # value column width
+
+    ws.column_dimensions[get_column_letter(COL_A)].width = W_A
+    ws.column_dimensions[get_column_letter(COL_B)].width = W_B
+
+    _row = [1]   # mutable row pointer
+
+    def _next():
+        r = _row[0]; _row[0] += 1; return r
+
+    def _banner(text, color=_NAV):
+        r = _next()
+        ws.merge_cells(start_row=r, start_column=COL_A, end_row=r, end_column=COL_B)
+        c = ws.cell(r, COL_A, text)
+        c.fill      = PatternFill("solid", fgColor=color)
+        c.font      = Font(bold=True, size=11, color=_WHT, name="Calibri")
+        c.alignment = Alignment(horizontal="left", vertical="center", indent=1)
+        c.border    = _bot_m
+        ws.row_dimensions[r].height = 22
+        return r
+
+    def _sub_header(label_a, label_b=""):
+        r = _next()
+        for ci, txt in ((COL_A, label_a), (COL_B, label_b)):
+            c = ws.cell(r, ci, txt)
+            c.fill      = PatternFill("solid", fgColor=_HDR_BG)
+            c.font      = Font(bold=True, size=9, color=_HDR_FG, name="Calibri")
+            c.alignment = Alignment(horizontal="left", vertical="center", indent=1)
+            c.border    = _grid
+        ws.row_dimensions[r].height = 16
+        return r
+
+    def _kv(label, value, label_bold=True, val_fg=_VAL_FG, row_idx=None, wrap=True):
+        r = row_idx if row_idx is not None else _next()
+        lc = ws.cell(r, COL_A, label)
+        lc.font      = Font(bold=label_bold, size=9, color=_LBL_FG, name="Calibri")
+        lc.alignment = Alignment(horizontal="left", vertical="top", indent=1, wrap_text=True)
+        lc.fill      = PatternFill("solid", fgColor=_ROW_ODD)
+        lc.border    = _grid
+
+        vc = ws.cell(r, COL_B, value)
+        vc.font      = Font(size=9, color=val_fg, name="Calibri")
+        vc.alignment = Alignment(horizontal="left", vertical="top", indent=1, wrap_text=wrap)
+        vc.fill      = PatternFill("solid", fgColor=_ROW_ODD)
+        vc.border    = _grid
+        ws.row_dimensions[r].height = 16
+        return r
+
+    def _spacer():
+        r = _next()
+        for ci in (COL_A, COL_B):
+            c = ws.cell(r, ci, "")
+            c.fill   = PatternFill("solid", fgColor=_ROW_ODD)
+            c.border = _grid
+        ws.row_dimensions[r].height = 8
+        return r
+
+    # ══════════════════════════════════════════════════════════════════
+    #  SECTION 1 — Settings for this export
+    # ══════════════════════════════════════════════════════════════════
+    _banner("Settings for this export")
+    _kv("When exported",       generated_at)
+    _kv("Exported by",         exported_by)
+    _kv("Portfolio file used", fname)
+    _kv("What this workbook is", export_scope_note)
+
+    # Risk rules in effect
+    _risk_ranges = getattr(self_app, "_sim_risk_ranges", None) or {}
+    _low_r  = _risk_ranges.get("LOW",    (1.0,  35.0))
+    _med_r  = _risk_ranges.get("MEDIUM", (36.0, 70.0))
+    _high_r = _risk_ranges.get("HIGH",   (71.0, float("inf")))
+    def _fmt_range(lo, hi):
+        return f"{lo:.0f}% – {hi:.0f}%" if hi != float("inf") else f"≥ {lo:.0f}%"
+    risk_rules_text = (
+        f"LOW:     {_fmt_range(*_low_r)}\n"
+        f"MEDIUM:  {_fmt_range(*_med_r)}\n"
+        f"HIGH:    {_fmt_range(*_high_r)}"
+    )
+    r_risk = _next()
+    lc = ws.cell(r_risk, COL_A, "Risk thresholds (% Net → Amort)")
+    lc.font      = Font(bold=True, size=9, color=_LBL_FG, name="Calibri")
+    lc.alignment = Alignment(horizontal="left", vertical="top", indent=1, wrap_text=True)
+    lc.fill      = PatternFill("solid", fgColor=_ROW_ODD); lc.border = _grid
+    vc = ws.cell(r_risk, COL_B, risk_rules_text)
+    vc.font      = Font(size=9, color=_VAL_FG, name="Calibri")
+    vc.alignment = Alignment(horizontal="left", vertical="top", indent=1, wrap_text=True)
+    vc.fill      = PatternFill("solid", fgColor=_ROW_ODD); vc.border = _grid
+    ws.row_dimensions[r_risk].height = 48
+
+    _spacer()
+
+    # ══════════════════════════════════════════════════════════════════
+    #  SECTION 2 — Expense modifications
+    # ══════════════════════════════════════════════════════════════════
+    _banner("Expense modifications applied in this simulation")
+
+    # Collect all expense names + their slider values
+    sliders   = getattr(self_app, "_sim_sliders",  {}) or {}
+    expenses  = getattr(self_app, "_sim_expenses", []) or []
+    # Build ordered list of (name, pct) for every expense with a non-zero slider
+    modified = []
+    zero_list = []
+    for exp in expenses:
+        name = str((exp or {}).get("name") or "").strip()
+        if not name:
+            continue
+        var = sliders.get(name)
+        pct = 0.0
+        if var:
+            try:
+                pct = float(var.get() or 0)
+            except Exception:
+                pct = 0.0
+        if pct != 0.0:
+            modified.append((name, pct))
+        else:
+            zero_list.append(name)
+
+    # Also pick up any slider keys not in _sim_expenses list
+    for nm, var in sliders.items():
+        if nm not in {e.get("name","") for e in expenses}:
+            try:
+                pct = float(var.get() or 0)
+            except Exception:
+                pct = 0.0
+            if pct != 0.0:
+                modified.append((nm, pct))
+
+    _sub_header("Expense Item", "Change Applied")
+
+    if modified:
+        modified.sort(key=lambda x: -abs(x[1]))  # largest change first
+        for idx, (nm, pct) in enumerate(modified):
+            r = _next()
+            bg = _ROW_ODD if idx % 2 == 0 else _ROW_EVEN
+            change_str = f"+{pct:.1f}% increase" if pct > 0 else f"{pct:.1f}% decrease"
+            val_color  = _MOD_POS if pct > 0 else _MOD_NEG
+
+            lc = ws.cell(r, COL_A, nm)
+            lc.fill      = PatternFill("solid", fgColor=bg)
+            lc.font      = Font(size=9, color=_LBL_FG, name="Calibri")
+            lc.alignment = Alignment(horizontal="left", vertical="center", indent=1)
+            lc.border    = _grid
+
+            vc = ws.cell(r, COL_B, change_str)
+            vc.fill      = PatternFill("solid", fgColor=bg)
+            vc.font      = Font(bold=True, size=9, color=val_color, name="Calibri")
+            vc.alignment = Alignment(horizontal="left", vertical="center", indent=1)
+            vc.border    = _grid
+            ws.row_dimensions[r].height = 16
+    else:
+        r = _next()
+        ws.merge_cells(start_row=r, start_column=COL_A, end_row=r, end_column=COL_B)
+        c = ws.cell(r, COL_A, "— No expense modifications — all sliders at 0% —")
+        c.fill      = PatternFill("solid", fgColor=_ROW_ODD)
+        c.font      = Font(italic=True, size=9, color=_NONE_FG, name="Calibri")
+        c.alignment = Alignment(horizontal="left", vertical="center", indent=2)
+        c.border    = _grid
+        ws.row_dimensions[r].height = 16
+
+    # Summary count row
+    _total_exp = len(modified) + len(zero_list)
+    r_sum = _next()
+    ws.merge_cells(start_row=r_sum, start_column=COL_A, end_row=r_sum, end_column=COL_B)
+    c_sum = ws.cell(r_sum, COL_A,
+        f"  {len(modified)} of {_total_exp} expense item(s) modified   |   "
+        f"{len(zero_list)} at 0% (no change)"
+    )
+    c_sum.fill      = PatternFill("solid", fgColor=_HDR_BG)
+    c_sum.font      = Font(italic=True, size=8, color=_HDR_FG, name="Calibri")
+    c_sum.alignment = Alignment(horizontal="left", vertical="center", indent=1)
+    c_sum.border    = _grid
+    ws.row_dimensions[r_sum].height = 14
+
+    _spacer()
+
+    # Final spacer
+    _spacer()
+
+
+def _sim_write_settings_sheet(ws_settings, *, self_app, row_offset: int = 0):
+    """
+    Write a dedicated 'Settings' section that documents:
+      1. How the % Net Income to Amortization is calculated
+      2. How each Risk label (LOW / MEDIUM / HIGH) is achieved
+      3. Expense modifications applied in the simulation
+      4. Industries used in the Industry Checklist
+
+    row_offset: if > 0, content is appended starting at that row (used when
+    this function writes onto an existing sheet after export-settings content).
+    """
+    try:
+        import openpyxl
+        from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
+        from openpyxl.utils import get_column_letter
+    except ImportError:
+        return
+
+    # ── Palette (matches the navy theme) ────────────────────────────────
+    _NAV      = "1A3A5C"
+    _WHT      = "FFFFFF"
+    _HDR_BG   = "EAF2FB"
+    _HDR_FG   = "1A3A5C"
+    _ROW_ODD  = "FFFFFF"
+    _ROW_EVEN = "F4F8FD"
+    _LBL_FG   = "1A3A5C"
+    _VAL_FG   = "374151"
+    _NONE_FG  = "9CA3AF"
+    _MOD_POS  = "1E8449"
+    _MOD_NEG  = "C0392B"
+    _GOLD     = "9A6700"
+    _BORDER   = "D5DCE4"
+    _EXPL_BG  = "F0F7FF"   # light blue tint for explanation rows
+    _EXPL_FG  = "2C5282"   # medium navy for explanation text
+
+    _thin  = Side(border_style="thin",   color=_BORDER)
+    _med   = Side(border_style="medium", color=_NAV)
+    _grid  = Border(left=_thin, right=_thin, top=_thin, bottom=_thin)
+    _bot_m = Border(left=_thin, right=_thin, top=_thin, bottom=_med)
+
+    COL_A = 1
+    COL_B = 2
+    COL_C = 3
+    ws_settings.column_dimensions[get_column_letter(COL_A)].width = 32
+    ws_settings.column_dimensions[get_column_letter(COL_B)].width = 40
+    ws_settings.column_dimensions[get_column_letter(COL_C)].width = 60
+
+    _row = [max(1, int(row_offset) + 1)]
+
+    def _next():
+        r = _row[0]; _row[0] += 1; return r
+
+    def _banner(text, color=_NAV):
+        r = _next()
+        ws_settings.merge_cells(start_row=r, start_column=COL_A, end_row=r, end_column=COL_C)
+        c = ws_settings.cell(r, COL_A, text)
+        c.fill      = PatternFill("solid", fgColor=color)
+        c.font      = Font(bold=True, size=11, color=_WHT, name="Calibri")
+        c.alignment = Alignment(horizontal="left", vertical="center", indent=1)
+        c.border    = _bot_m
+        ws_settings.row_dimensions[r].height = 22
+        return r
+
+    def _sub_header(col_a_txt, col_b_txt="", col_c_txt=""):
+        r = _next()
+        for ci, txt in ((COL_A, col_a_txt), (COL_B, col_b_txt), (COL_C, col_c_txt)):
+            c = ws_settings.cell(r, ci, txt)
+            c.fill      = PatternFill("solid", fgColor=_HDR_BG)
+            c.font      = Font(bold=True, size=9, color=_HDR_FG, name="Calibri")
+            c.alignment = Alignment(horizontal="left", vertical="center", indent=1)
+            c.border    = _grid
+        ws_settings.row_dimensions[r].height = 16
+        return r
+
+    def _row3(col_a_val, col_b_val, col_c_val, bg=_ROW_ODD,
+              a_bold=False, b_bold=False, c_bold=False,
+              a_fg=_LBL_FG, b_fg=_VAL_FG, c_fg=_VAL_FG,
+              wrap_c=True, height=16):
+        r = _next()
+        for ci, txt, bold, fg, wrap in (
+            (COL_A, col_a_val, a_bold, a_fg, False),
+            (COL_B, col_b_val, b_bold, b_fg, False),
+            (COL_C, col_c_val, c_bold, c_fg, wrap_c),
+        ):
+            c = ws_settings.cell(r, ci, txt)
+            c.fill      = PatternFill("solid", fgColor=bg)
+            c.font      = Font(bold=bold, size=9, color=fg, name="Calibri")
+            c.alignment = Alignment(horizontal="left", vertical="top", indent=1, wrap_text=wrap)
+            c.border    = _grid
+        ws_settings.row_dimensions[r].height = height
+        return r
+
+    def _expl_row(text, height=30):
+        """Full-width explanation row with light blue background."""
+        r = _next()
+        ws_settings.merge_cells(start_row=r, start_column=COL_A, end_row=r, end_column=COL_C)
+        c = ws_settings.cell(r, COL_A, text)
+        c.fill      = PatternFill("solid", fgColor=_EXPL_BG)
+        c.font      = Font(italic=True, size=9, color=_EXPL_FG, name="Calibri")
+        c.alignment = Alignment(horizontal="left", vertical="top", indent=2, wrap_text=True)
+        c.border    = _grid
+        ws_settings.row_dimensions[r].height = height
+        return r
+
+    def _spacer():
+        r = _next()
+        for ci in (COL_A, COL_B, COL_C):
+            c = ws_settings.cell(r, ci, "")
+            c.fill   = PatternFill("solid", fgColor=_ROW_ODD)
+            c.border = _grid
+        ws_settings.row_dimensions[r].height = 8
+        return r
+
+    # ── Get risk ranges ──────────────────────────────────────────────────
+    _risk_ranges = getattr(self_app, "_sim_risk_ranges", None) or {}
+    _low_r  = _risk_ranges.get("LOW",    (1.0,  35.0))
+    _med_r  = _risk_ranges.get("MEDIUM", (36.0, 70.0))
+    _high_r = _risk_ranges.get("HIGH",   (71.0, float("inf")))
+
+    def _fmt_range(lo, hi):
+        return f"{lo:.0f}% – {hi:.0f}%" if hi != float("inf") else f">= {lo:.0f}%"
+
+    # ══════════════════════════════════════════════════════════════════
+    #  SECTION 1 — Formula Explanation
+    # ══════════════════════════════════════════════════════════════════
+    _banner("How % Net Income to Amortization is Calculated")
+    _expl_row(
+        "The % Net Income to Amortization measures how much of a client's simulated net income "
+        "is consumed by their loan amortization obligations. A higher percentage means a larger "
+        "portion of income is used for debt repayment, leaving less buffer for operating costs "
+        "and unexpected expenses.",
+        height=36,
+    )
+    _sub_header("Step", "Formula / Value", "Description")
+    _row3("1. Base Net Income",         " = Total Net Income (Base)",
+          "The client's net income before any simulated cost shocks.", height=18)
+    _row3("2. Simulated Cost Increase",  " = Sum of (Base Expense × Slider %)",
+          "For each modified expense, the extra cost is: Base Amount × (Inflation Rate / 100). "
+          "The total of all extra costs is the Simulated Increase.", bg=_ROW_EVEN, height=24, wrap_c=True)
+    _row3("3. Simulated Net Income",     " = Base Net Income − Simulated Cost Increase",
+          "Net income after the simulated cost shock is applied. This is the denominator "
+          "used in the ratio.", height=24, wrap_c=True)
+    _row3("4. % Net → Amort",
+          " = (Total Current Amort / Simulated Net Income) × 100",
+          "The final ratio. If Simulated Net Income ≤ 0, the ratio is set to 999% to flag "
+          "the client as extreme risk (amortization exceeds income).",
+          bg=_ROW_EVEN, a_bold=True, b_bold=True, height=30, wrap_c=True)
+
+    _spacer()
+
+    # ══════════════════════════════════════════════════════════════════
+    #  SECTION 2 — Risk Label Explanation
+    # ══════════════════════════════════════════════════════════════════
+    _banner("How the Risk Label is Determined")
+    _expl_row(
+        "The Risk Label (LOW / MEDIUM / HIGH) is assigned based on the % Net Income to Amortization "
+        "computed after applying the simulated expense increases. The thresholds below are configurable "
+        "via the '⚖ Risk Ranges' button in the simulator.",
+        height=36,
+    )
+    _sub_header("Risk Label", "% Net → Amort Range", "Explanation")
+
+    # LOW
+    _row3("LOW", _fmt_range(*_low_r),
+          f"A client is rated LOW risk when their % Net → Amort falls between "
+          f"{_low_r[0]:.0f}% and {_low_r[1]:.0f}%. This means their simulated net income "
+          f"comfortably covers their amortization obligation with significant income remaining.",
+          a_bold=True, a_fg=_MOD_POS, b_fg=_MOD_POS, height=36, wrap_c=True)
+
+    # MEDIUM
+    _row3("MEDIUM", _fmt_range(*_med_r),
+          f"A client is rated MEDIUM risk when their % Net → Amort falls between "
+          f"{_med_r[0]:.0f}% and {_med_r[1]:.0f}%. The simulated cost shock has notably reduced "
+          f"their income buffer, and close monitoring is recommended.",
+          bg=_ROW_EVEN, a_bold=True, a_fg=_GOLD, b_fg=_GOLD, height=36, wrap_c=True)
+
+    # HIGH
+    _hi_lo = _high_r[0]
+    _row3("HIGH", _fmt_range(*_high_r),
+          f"A client is rated HIGH risk when their % Net → Amort is {_hi_lo:.0f}% or above "
+          f"(including the extreme 999% case where simulated net income is zero or negative). "
+          f"This client may have difficulty servicing their loan under the simulated scenario "
+          f"and should be reviewed carefully — they might have a special loan case.",
+          a_bold=True, a_fg=_MOD_NEG, b_fg=_MOD_NEG, height=48, wrap_c=True)
+
+    _spacer()
+
+    # ══════════════════════════════════════════════════════════════════
+    #  SECTION 3 — Expense Modifications
+    # ══════════════════════════════════════════════════════════════════
+    _banner("Expense Modifications Applied in this Simulation")
+    _expl_row(
+        "The table below shows every expense item whose inflation slider was set to a non-zero "
+        "value. Only modified expenses affect the simulated totals; items at 0% are unchanged. "
+        "A positive % means the expense was inflated (cost shock scenario); a negative % "
+        "means the expense was reduced.",
+        height=36,
+    )
+    _sub_header("Expense Item", "Change Applied (%)", "Interpretation")
+
+    sliders  = getattr(self_app, "_sim_sliders",  {}) or {}
+    expenses = getattr(self_app, "_sim_expenses", []) or []
+    modified = []
+    zero_list = []
+    for exp in expenses:
+        name = str((exp or {}).get("name") or "").strip()
+        if not name:
+            continue
+        var = sliders.get(name)
+        pct = 0.0
+        if var:
+            try:
+                pct = float(var.get() or 0)
+            except Exception:
+                pct = 0.0
+        if pct != 0.0:
+            modified.append((name, pct))
+        else:
+            zero_list.append(name)
+    for nm, var in sliders.items():
+        if nm not in {e.get("name", "") for e in expenses}:
+            try:
+                pct = float(var.get() or 0)
+            except Exception:
+                pct = 0.0
+            if pct != 0.0:
+                modified.append((nm, pct))
+
+    if modified:
+        modified.sort(key=lambda x: -abs(x[1]))
+        for idx, (nm, pct) in enumerate(modified):
+            bg = _ROW_ODD if idx % 2 == 0 else _ROW_EVEN
+            change_str = f"+{pct:.1f}% increase" if pct > 0 else f"{pct:.1f}% decrease"
+            val_color  = _MOD_POS if pct > 0 else _MOD_NEG
+            interp = (
+                f"Each peso of '{nm}' is multiplied by {1 + pct/100:.3f}x in the simulation. "
+                f"Extra cost per client = their '{nm}' base amount × {pct:.1f} / 100."
+            )
+            _row3(nm, change_str, interp, bg=bg,
+                  b_bold=True, b_fg=val_color, height=24, wrap_c=True)
+    else:
+        r = _next()
+        ws_settings.merge_cells(start_row=r, start_column=COL_A, end_row=r, end_column=COL_C)
+        c = ws_settings.cell(r, COL_A, "— No expense modifications — all sliders at 0% —")
+        c.fill      = PatternFill("solid", fgColor=_ROW_ODD)
+        c.font      = Font(italic=True, size=9, color=_NONE_FG, name="Calibri")
+        c.alignment = Alignment(horizontal="left", vertical="center", indent=2)
+        c.border    = _grid
+        ws_settings.row_dimensions[r].height = 16
+
+    # Summary count
+    _total_exp = len(modified) + len(zero_list)
+    r_sum = _next()
+    ws_settings.merge_cells(start_row=r_sum, start_column=COL_A, end_row=r_sum, end_column=COL_C)
+    c_sum = ws_settings.cell(r_sum, COL_A,
+        f"  {len(modified)} of {_total_exp} expense item(s) modified   |   "
+        f"{len(zero_list)} at 0% (no change)"
+    )
+    c_sum.fill      = PatternFill("solid", fgColor=_HDR_BG)
+    c_sum.font      = Font(italic=True, size=8, color=_HDR_FG, name="Calibri")
+    c_sum.alignment = Alignment(horizontal="left", vertical="center", indent=1)
+    c_sum.border    = _grid
+    ws_settings.row_dimensions[r_sum].height = 14
+
+    _spacer()
+
+    # ══════════════════════════════════════════════════════════════════
+    #  SECTION 4 — Industry Checklist
+    # ══════════════════════════════════════════════════════════════════
+    _banner("Industry Checklist Used in Simulation")
+    _expl_row(
+        "Only clients belonging to the industries marked '✔ Yes — included' below were "
+        "included in the simulator's Client Impact table. Industries marked '✘ Not selected' "
+        "were excluded from the simulation. If no industry filter was active, all industries "
+        "are included.",
+        height=36,
+    )
+    _sub_header("Industry", "In Checklist?", "Notes")
+
+    selected_inds = sorted(
+        getattr(self_app, "_sim_selected_industries", set()) or set(), key=str.lower
+    )
+    all_data = getattr(self_app, "_lu_all_data", {}) or {}
+    all_inds = sorted(
+        {str(x).strip() for x in all_data.get("unique_industries", []) if str(x).strip()},
+        key=str.lower,
+    )
+    selected_set = {str(x).strip().lower() for x in selected_inds}
+
+    # When nothing is checked, the filter is inactive — all industries are included.
+    no_filter_active = len(selected_inds) == 0
+
+    if all_inds:
+        for idx, ind in enumerate(all_inds):
+            bg  = _ROW_ODD if idx % 2 == 0 else _ROW_EVEN
+            if no_filter_active:
+                # No filter → every industry is included
+                status = "✔  Yes — included (no filter active)"
+                note   = "All industries included — no industry filter was set."
+                b_bold, b_fg, c_fg = True, _MOD_POS, _EXPL_FG
+            else:
+                chk    = ind.strip().lower() in selected_set
+                status = "✔  Yes — included in simulation" if chk else "✘  Not selected"
+                note   = ("Clients in this industry were included in the simulator." if chk
+                          else "Clients in this industry were excluded from the simulator.")
+                b_bold = chk
+                b_fg   = _MOD_POS if chk else _NONE_FG
+                c_fg   = _EXPL_FG if chk else _NONE_FG
+            _row3(ind, status, note, bg=bg,
+                  b_bold=b_bold, b_fg=b_fg, c_fg=c_fg,
+                  height=16, wrap_c=False)
+    elif selected_inds:
+        for idx, ind in enumerate(selected_inds):
+            bg = _ROW_ODD if idx % 2 == 0 else _ROW_EVEN
+            _row3(ind, "✔  Yes — included in simulation",
+                  "Clients in this industry were included in the simulator.",
+                  bg=bg, b_bold=True, b_fg=_MOD_POS, c_fg=_EXPL_FG, height=16)
+    else:
+        r = _next()
+        ws_settings.merge_cells(start_row=r, start_column=COL_A, end_row=r, end_column=COL_C)
+        c = ws_settings.cell(r, COL_A, "— No industry filter active — all industries included —")
+        c.fill      = PatternFill("solid", fgColor=_ROW_ODD)
+        c.font      = Font(italic=True, size=9, color=_NONE_FG, name="Calibri")
+        c.alignment = Alignment(horizontal="left", vertical="center", indent=2)
+        c.border    = _grid
+        ws_settings.row_dimensions[r].height = 16
+
+    # Summary
+    r_ind_sum2 = _next()
+    ws_settings.merge_cells(start_row=r_ind_sum2, start_column=COL_A, end_row=r_ind_sum2, end_column=COL_C)
+    _summary_text = (
+        "  All industries included — no filter active"
+        if no_filter_active
+        else f"  {len(selected_inds)} of {len(all_inds) or len(selected_inds)} "
+             f"industry/industries selected in checklist"
+    )
+    c_ind2 = ws_settings.cell(r_ind_sum2, COL_A, _summary_text)
+    c_ind2.fill      = PatternFill("solid", fgColor=_HDR_BG)
+    c_ind2.font      = Font(italic=True, size=8, color=_HDR_FG, name="Calibri")
+    c_ind2.alignment = Alignment(horizontal="left", vertical="center", indent=1)
+    c_ind2.border    = _grid
+    ws_settings.row_dimensions[r_ind_sum2].height = 14
+
+    _spacer()
+
+
 def _sim_export_client_impact_excel(self):
     """
     Export the simulator "Client Impact" rows to Excel.
@@ -2321,9 +2900,8 @@ def _sim_export_client_impact_excel(self):
     """
     try:
         import openpyxl
-        from openpyxl.styles import Font, Alignment, PatternFill
+        from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
         from openpyxl.utils import get_column_letter
-        from lu_loanbal_export_patch import _write_configuration_settings_sheet
     except ImportError:
         messagebox.showerror(
             "Missing Library",
@@ -2429,9 +3007,8 @@ def _sim_export_client_impact_excel(self):
             "risk_reasoning": risk_reasoning,
         })
 
-    # Highest risk first, then larger amort ratio.
-    risk_order = {"HIGH": 0, "MEDIUM": 1, "LOW": 2}
-    rows.sort(key=lambda r: (risk_order.get(r["sim_risk_label"], 9), -(r["pct_net_to_amort"] or 0.0)))
+    # Sort by highest % Net → Amort first (descending).
+    rows.sort(key=lambda r: -(r["pct_net_to_amort"] or 0.0))
 
     from tkinter import filedialog
     import getpass
@@ -2451,7 +3028,7 @@ def _sim_export_client_impact_excel(self):
 
     wb = openpyxl.Workbook()
     ws_cfg = wb.active
-    ws_cfg.title = "Export settings"
+    ws_cfg.title = "Settings"
 
     exported_by = str(getattr(self, "_current_username", "") or "").strip()
     if not exported_by:
@@ -2466,99 +3043,180 @@ def _sim_export_client_impact_excel(self):
     industry_note = "None (no industry filter)" if not selected_inds else " · ".join(selected_inds)
     search_note = _search_term if _search_term else "None"
 
-    _write_configuration_settings_sheet(
+    _sim_write_export_settings_sheet(
         ws_cfg,
+        self_app=self,
         fname=Path(str(getattr(self, "_lu_filepath", "") or "—")).name,
         generated_at=datetime.now().strftime("%B %d, %Y  %H:%M"),
         exported_by=exported_by,
         export_scope_note=(
             "Risk Simulator export — includes current simulator what-if values from the Client Impact table. "
-            f"Industry filter: {industry_note}. Client search: {search_note}."
+            f"Client search: {search_note}."
         ),
     )
 
-    # Client Impact sheet.
+    # ── Append formula/risk/expense/industry sections to the same sheet ──
+    _used_rows = ws_cfg.max_row
+    _sim_write_settings_sheet(ws_cfg, self_app=self, row_offset=_used_rows + 1)
+
+    # ── Shared modern style palette ───────────────────────────────────
+    _C_HDR_BG    = "1A3A5C"   # deep navy header
+    _C_HDR_FG    = "FFFFFF"   # white header text
+    _C_BANNER_BG = "1E4D7B"   # slightly lighter navy for banner
+    _C_BANNER_FG = "FFFFFF"
+    _C_META_BG   = "EAF2FB"   # very light blue for meta row
+    _C_META_FG   = "1A3A5C"
+    _C_ROW_ODD   = "FFFFFF"   # clean white
+    _C_ROW_EVEN  = "F4F8FD"   # subtle blue-tint stripe
+    _C_HIGH_BG   = "FEF0EE"   # soft red tint
+    _C_HIGH_FG   = "C0392B"
+    _C_MED_BG    = "FEFAE8"   # soft amber tint
+    _C_MED_FG    = "9A6700"
+    _C_LOW_BG    = "EDFAF1"   # soft green tint
+    _C_LOW_FG    = "1E8449"
+    _C_BORDER    = "D5DCE4"   # light grey grid lines
+    _C_ACCENT    = "2980B9"   # blue accent for numbers
+
+    _thin    = Side(border_style="thin",   color=_C_BORDER)
+    _thick_b = Side(border_style="medium", color=_C_HDR_BG)
+    _grid    = Border(left=_thin, right=_thin, top=_thin, bottom=_thin)
+    _hdr_bot = Border(left=_thin, right=_thin, top=_thin, bottom=_thick_b)
+
+    NUM_FMT  = '"₱"#,##0.00'
+    PCT_FMT  = '0.0"%"'
+
+    # ── Client Impact sheet ───────────────────────────────────────────
     ws = wb.create_sheet("Client Impact")
+    NUM_COLS = 21
+
+    # Row 1 — Title banner
+    ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=NUM_COLS)
+    _b = ws.cell(1, 1, "📊  RISK SIMULATOR — Client Impact Report")
+    _b.fill      = PatternFill("solid", fgColor=_C_BANNER_BG)
+    _b.font      = Font(bold=True, size=13, color=_C_BANNER_FG, name="Calibri")
+    _b.alignment = Alignment(horizontal="left", vertical="center", indent=1)
+    ws.row_dimensions[1].height = 28
+
+    # Row 2 — Meta info (timestamp / exported by)
+    ws.merge_cells(start_row=2, start_column=1, end_row=2, end_column=NUM_COLS)
+    _meta_text = (
+        f"Generated: {datetime.now().strftime('%B %d, %Y  %H:%M')}     "
+        f"Exported by: {exported_by}     "
+        f"Total clients: {len(rows)}"
+    )
+    _m = ws.cell(2, 1, _meta_text)
+    _m.fill      = PatternFill("solid", fgColor=_C_META_BG)
+    _m.font      = Font(italic=True, size=9, color=_C_META_FG, name="Calibri")
+    _m.alignment = Alignment(horizontal="left", vertical="center", indent=1)
+    ws.row_dimensions[2].height = 16
+
+    # Row 3 — Column headers
     headers = [
-        "Client ID",
-        "PN",
-        "Client",
-        "Residence Address",
-        "Office Address",
-        "Industry",
-        "Loan Status",
-        "AO Name",
-        "Product Name",
-        "Loan Balance",
-        "Principal Loan",
-        "Total Expenses (Base)",
-        "Total Expenses (Sim)",
-        "Total Net Income (Base)",
-        "Total Net Income (Sim)",
-        "% Increase",
-        "Simulated Increase",
-        "Total Current Amort",
-        "% Net → Amort",
-        "Risk Label",
-        "Risk Reasoning",
+        "Client ID", "PN", "Client", "Residence Address", "Office Address",
+        "Industry", "Loan Status", "AO Name", "Product Name",
+        "Loan Balance", "Principal Loan",
+        "Total Expenses (Base)", "Total Expenses (Sim)",
+        "Total Net Income (Base)", "Total Net Income (Sim)",
+        "% Increase", "Simulated Increase",
+        "Total Current Amort", "% Net → Amort",
+        "Risk Label", "Risk Reasoning",
     ]
-
-    hdr_fill = PatternFill("solid", fgColor=_NAVY_DEEP.lstrip("#"))
-    hdr_font = Font(bold=True, size=10, color="FFFFFF")
+    _hf = Font(bold=True, size=9, color=_C_HDR_FG, name="Calibri")
+    _ha = Alignment(horizontal="center", vertical="center", wrap_text=True)
     for ci, h in enumerate(headers, 1):
-        cell = ws.cell(1, ci, h)
-        cell.fill = hdr_fill
-        cell.font = hdr_font
-        cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+        cell = ws.cell(3, ci, h)
+        cell.fill      = PatternFill("solid", fgColor=_C_HDR_BG)
+        cell.font      = _hf
+        cell.alignment = _ha
+        cell.border    = _hdr_bot
+    ws.row_dimensions[3].height = 32
 
-    # Column widths (Excel-ish, not perfect).
-    col_widths = [14, 14, 24, 24, 24, 18, 16, 18, 20, 16, 16, 18, 18, 20, 20, 12, 18, 18, 12, 52]
+    # Column widths
+    col_widths = [13, 13, 24, 22, 22, 18, 14, 18, 20, 15, 15, 18, 18, 18, 18, 11, 17, 17, 13, 12, 48]
     for ci, w in enumerate(col_widths, 1):
         ws.column_dimensions[get_column_letter(ci)].width = w
 
-    NUM_FMT = '"₱"#,##0.00'
-    PCT_FMT = '0.0"%"'
+    # Data rows (start row 4)
+    _risk_colors = {
+        "HIGH":   (_C_HIGH_BG, _C_HIGH_FG),
+        "MEDIUM": (_C_MED_BG,  _C_MED_FG),
+        "LOW":    (_C_LOW_BG,  _C_LOW_FG),
+    }
 
-    for idx, r in enumerate(rows, 0):
-        row_num = 2 + idx
-        ws.cell(row_num, 1, r["client_id"] or "—")
-        ws.cell(row_num, 2, r["pn"] or "—")
-        ws.cell(row_num, 3, r["client"])
-        ws.cell(row_num, 4, r["residence_address"] or "—")
-        ws.cell(row_num, 5, r["office_address"] or "—")
-        ws.cell(row_num, 6, r["industry"])
-        ws.cell(row_num, 7, r["loan_status"] or "—")
-        ws.cell(row_num, 8, r["ao_name"] or "—")
-        ws.cell(row_num, 9, r["product_name"] or "—")
-        ws.cell(row_num, 10, r["loan_balance"]).number_format = NUM_FMT
-        ws.cell(row_num, 11, r["principal_loan"]).number_format = NUM_FMT
-        ws.cell(row_num, 12, r["base_total_expenses"]).number_format = NUM_FMT
-        ws.cell(row_num, 13, r["sim_total_expenses"]).number_format = NUM_FMT
-        ws.cell(row_num, 14, r["net_income"]).number_format = NUM_FMT
-        ws.cell(row_num, 15, r["sim_net_income"]).number_format = NUM_FMT
-        ws.cell(row_num, 16, r["pct_increase"]).number_format = PCT_FMT
-        ws.cell(row_num, 17, r["sim_increase"]).number_format = NUM_FMT
-        ws.cell(row_num, 18, r["current_amort"]).number_format = NUM_FMT
-        ws.cell(row_num, 19, r["pct_net_to_amort"]).number_format = PCT_FMT
-        ws.cell(row_num, 20, r["sim_risk_label"])
-        ws.cell(row_num, 21, r["risk_reasoning"])
+    for idx, r in enumerate(rows):
+        row_num = 4 + idx
+        risk = str(r.get("sim_risk_label") or "").upper()
+        if risk in _risk_colors:
+            row_bg, _risk_fg = _risk_colors[risk]
+        else:
+            row_bg = _C_ROW_ODD if idx % 2 == 0 else _C_ROW_EVEN
+            _risk_fg = "374151"
 
-    ws.freeze_panes = "A2"
+        _base_font = Font(size=9, color="374151", name="Calibri")
+        _num_font  = Font(size=9, color=_C_ACCENT, name="Calibri")
+        _pct_font  = Font(size=9, color="374151", name="Calibri")
+        _risk_font = Font(bold=True, size=9, color=_risk_fg, name="Calibri")
+        _rf        = PatternFill("solid", fgColor=row_bg)
+        _al_l      = Alignment(horizontal="left",   vertical="center", wrap_text=False)
+        _al_c      = Alignment(horizontal="center", vertical="center")
+        _al_r      = Alignment(horizontal="right",  vertical="center")
+
+        def _wc(col, val, font=_base_font, align=_al_l, fmt=None):
+            c = ws.cell(row_num, col, val)
+            c.fill = _rf; c.font = font; c.alignment = align; c.border = _grid
+            if fmt: c.number_format = fmt
+            return c
+
+        _wc(1,  r["client_id"] or "—")
+        _wc(2,  r["pn"] or "—")
+        _wc(3,  r["client"])
+        _wc(4,  r["residence_address"] or "—")
+        _wc(5,  r["office_address"] or "—")
+        _wc(6,  r["industry"])
+        _wc(7,  r["loan_status"] or "—", align=_al_c)
+        _wc(8,  r["ao_name"] or "—")
+        _wc(9,  r["product_name"] or "—")
+        _wc(10, r["loan_balance"],        font=_num_font, align=_al_r, fmt=NUM_FMT)
+        _wc(11, r["principal_loan"],      font=_num_font, align=_al_r, fmt=NUM_FMT)
+        _wc(12, r["base_total_expenses"], font=_num_font, align=_al_r, fmt=NUM_FMT)
+        _wc(13, r["sim_total_expenses"],  font=_num_font, align=_al_r, fmt=NUM_FMT)
+        _wc(14, r["net_income"],          font=_num_font, align=_al_r, fmt=NUM_FMT)
+        _wc(15, r["sim_net_income"],      font=_num_font, align=_al_r, fmt=NUM_FMT)
+        _wc(16, r["pct_increase"],        font=_pct_font, align=_al_c, fmt=PCT_FMT)
+        _wc(17, r["sim_increase"],        font=_num_font, align=_al_r, fmt=NUM_FMT)
+        _wc(18, r["current_amort"],       font=_num_font, align=_al_r, fmt=NUM_FMT)
+        _wc(19, r["pct_net_to_amort"],    font=_pct_font, align=_al_c, fmt=PCT_FMT)
+        _wc(20, r["sim_risk_label"],      font=_risk_font, align=_al_c)
+        _wc(21, r["risk_reasoning"],      align=Alignment(horizontal="left", vertical="center", wrap_text=True))
+        ws.row_dimensions[row_num].height = 18
+
+    ws.freeze_panes = "A4"
+    ws.auto_filter.ref = f"A3:{get_column_letter(NUM_COLS)}{3 + len(rows)}"
     wb.save(path)
     messagebox.showinfo("Export Complete", f"Excel saved to:\n{path}", parent=self)
 
 
 def _sim_merge_excel_files(self):
     """
-    Merge Simulator Client Impact exports with Summary-tab exports.
+    Merge sample Excel file columns into the live Client Impact table.
 
-    Merge key is NAME-BASED (Client/Applicant), as requested.
-    For duplicate names, preserve existing non-empty values and only patch
-    missing fields from later files.
+    Workflow:
+      1. User selects one or more Excel/CSV files (e.g. MARCH_BORROWERS_LIST.xlsx).
+      2. ALL columns from those files are read.
+      3. Each sample-file row is matched to a Client Impact row by NAME
+         (sample "Applicant" ↔ simulator "client").
+      4. The output contains EVERY column from both the Client Impact table
+         AND the sample file(s), joined on name — all columns merged.
+
+    Merge key is NAME-BASED.  "LAST, FIRST" form is normalised to
+    "FIRST LAST" before comparison so name formats don't cause mismatches.
+    When a name appears in both sources, sample-file values fill any
+    blank Client Impact fields; neither source overwrites existing data.
     """
     try:
         import openpyxl
-        from openpyxl.styles import Font, PatternFill, Alignment
+        from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+        from openpyxl.utils import get_column_letter
     except ImportError:
         messagebox.showerror(
             "Missing Library",
@@ -2567,9 +3225,20 @@ def _sim_merge_excel_files(self):
         )
         return
 
+    # ── Guard: need live simulator data ──────────────────────────────
+    recs_all = list(getattr(self, "_sim_recs", []) or [])
+    if not recs_all:
+        messagebox.showinfo(
+            "No Simulator Data",
+            "Run LU analysis and the simulator first, then use Merge Excel.",
+            parent=self,
+        )
+        return
+
+    # ── Pick sample file(s) ──────────────────────────────────────────
     paths = filedialog.askopenfilenames(
         parent=self,
-        title="Select Summary Excel/CSV files to merge",
+        title="Select Excel/CSV file(s) to merge into Client Impact",
         filetypes=[
             ("Excel & CSV files", "*.xlsx *.csv"),
             ("Excel files", "*.xlsx"),
@@ -2580,32 +3249,28 @@ def _sim_merge_excel_files(self):
     if not paths:
         return
 
+    # ── Helpers ───────────────────────────────────────────────────────
     def _norm_text(v) -> str:
         return str(v or "").strip()
 
-    def _row_name(row: dict) -> str:
-        # Support both Summary and Simulator naming conventions.
-        name = _norm_text(row.get("Applicant"))
-        if not name:
-            name = _norm_text(row.get("Client"))
-        if not name:
-            name = _norm_text(row.get("Client Name"))
-        return name
-
     def _norm_name(name: str) -> str:
+        """Normalise to uppercase, collapse spaces, flip LAST, FIRST → FIRST LAST."""
         s = _norm_text(name).upper()
         s = re.sub(r"[^A-Z0-9\s,.\-]", " ", s)
         s = re.sub(r"\s+", " ", s).strip()
-        # Handle "LAST, FIRST" form to improve joins.
         if "," in s:
             parts = [p.strip() for p in s.split(",", 1)]
             if len(parts) == 2 and parts[0] and parts[1]:
                 s = f"{parts[1]} {parts[0]}".strip()
         return s
 
-    def _key_for_row(row: dict) -> str:
-        name = _norm_name(_row_name(row))
-        return f"NAME::{name}" if name else ""
+    def _sample_row_name(row: dict) -> str:
+        """Extract the name field from a sample-file row."""
+        for col in ("Applicant", "Client", "Client Name", "Name"):
+            v = _norm_text(row.get(col))
+            if v:
+                return v
+        return ""
 
     def _is_empty(v) -> bool:
         if v is None:
@@ -2615,6 +3280,7 @@ def _sim_merge_excel_files(self):
         return False
 
     def _read_rows_from_file(path: str) -> tuple[list[str], list[dict]]:
+        """Return (headers, rows) from an xlsx or csv file."""
         if str(path).lower().endswith(".csv"):
             import csv as _csv
             with open(path, newline="", encoding="utf-8-sig") as f:
@@ -2628,10 +3294,10 @@ def _sim_merge_excel_files(self):
                         rows.append(rr)
                 return headers, rows
 
-        wb = openpyxl.load_workbook(path, read_only=True, data_only=True)
+        wb_s = openpyxl.load_workbook(path, read_only=True, data_only=True)
         try:
-            ws = wb.active
-            all_rows = list(ws.iter_rows(values_only=True))
+            ws_s = wb_s.active
+            all_rows = list(ws_s.iter_rows(values_only=True))
             if not all_rows:
                 return [], []
             headers = [str(c or "").strip() for c in all_rows[0]]
@@ -2649,113 +3315,510 @@ def _sim_merge_excel_files(self):
                     rows.append(row_dict)
             return headers, rows
         finally:
-            wb.close()
+            wb_s.close()
 
-    all_headers: list[str] = []
-    merged_by_key: dict[str, dict] = {}
+    # ── Build Client Impact rows from live simulator data ─────────────
+    # (same logic as _sim_export_client_impact_excel)
+    def _money_str(v) -> str:
+        try:
+            return f"₱{float(v):,.2f}"
+        except Exception:
+            return "—"
+
+    def _pct_str(v) -> str:
+        try:
+            return f"{float(v):.1f}%"
+        except Exception:
+            return "—"
+
+    impact_rows: list[dict] = []
+    for rec in recs_all:
+        name = str((rec or {}).get("client") or "").strip() or "—"
+        industry = str((rec or {}).get("industry") or "").strip() or "—"
+        base_net = float((rec or {}).get("net_income") or 0.0)
+        current_am = float((rec or {}).get("current_amort") or 0.0)
+
+        base_by_name: dict[str, float] = {}
+        base_total_exp = 0.0
+        for exp in (rec or {}).get("expenses", []) or []:
+            nm = str((exp or {}).get("name") or "").strip()
+            if not nm:
+                continue
+            try:
+                amt = float((exp or {}).get("total") or 0.0)
+            except Exception:
+                amt = 0.0
+            if amt <= 0:
+                continue
+            base_by_name[nm] = base_by_name.get(nm, 0.0) + amt
+            base_total_exp += amt
+
+        extra_total = 0.0
+        for nm, base_amt in base_by_name.items():
+            extra, _sim_amt = _sim_amount_for_expense(self, base_amt, nm)
+            extra_total += extra
+
+        sim_total_exp = base_total_exp + extra_total
+        pct_inc = (
+            extra_total / base_total_exp * 100.0
+            if base_total_exp > 0
+            else (0.0 if extra_total <= 0 else 100.0)
+        )
+        sim_net_income = base_net - extra_total
+        if sim_net_income <= 0:
+            pct_net_to_am = 999.0 if current_am > 0 else 0.0
+        else:
+            pct_net_to_am = (current_am / sim_net_income) * 100.0 if current_am > 0 else 0.0
+
+        sim_risk = _sim_pct_net_to_amort_label(pct_net_to_am, getattr(self, "_sim_risk_ranges", None))
+        risk_reasoning = _sim_build_risk_reasoning(sim_risk, pct_net_to_am)
+
+        impact_rows.append({
+            # Client Impact columns (using the same header names as the export)
+            "Client":                   name,
+            "Industry":                 industry,
+            "Client ID":                str((rec or {}).get("client_id") or "").strip(),
+            "PN":                       str((rec or {}).get("pn") or "").strip(),
+            "Residence Address":        str((rec or {}).get("residence_address") or "").strip(),
+            "Office Address":           str((rec or {}).get("office_address") or "").strip(),
+            "Loan Status":              str((rec or {}).get("loan_status") or "").strip(),
+            "AO Name":                  str((rec or {}).get("ao_name") or "").strip(),
+            "Product Name":             str((rec or {}).get("product_name") or "").strip(),
+            "Loan Balance":             _money_str((rec or {}).get("loan_balance")),
+            "Principal Loan":           _money_str((rec or {}).get("principal_loan")),
+            "Total Expenses (Base)":    _money_str(base_total_exp),
+            "Total Expenses (Sim)":     _money_str(sim_total_exp),
+            "Total Net Income (Base)":  _money_str(base_net),
+            "Total Net Income (Sim)":   _money_str(sim_net_income),
+            "% Increase":               _pct_str(pct_inc),
+            "Simulated Increase":       _money_str(extra_total),
+            "Total Current Amort":      _money_str(current_am),
+            "% Net → Amort":            _pct_str(pct_net_to_am),
+            "Risk Label":               sim_risk,
+            "Risk Reasoning":           risk_reasoning,
+        })
+
+    # Index Client Impact rows by normalised name for O(1) lookup.
+    impact_by_norm_name: dict[str, dict] = {}
+    for row in impact_rows:
+        key = _norm_name(row.get("Client", ""))
+        if key:
+            impact_by_norm_name[key] = row
+
+    # ── Read all sample files and collect every column ────────────────
+    sample_headers: list[str] = []
+    sample_by_norm_name: dict[str, dict] = {}
     loaded_rows = 0
 
     for p in paths:
         try:
-            headers, rows = _read_rows_from_file(p)
+            file_headers, file_rows = _read_rows_from_file(p)
         except Exception as exc:
             messagebox.showerror("Merge Error", f"Failed reading:\n{p}\n\n{exc}", parent=self)
             return
 
-        for h in headers:
-            if h and h not in all_headers:
-                all_headers.append(h)
+        for h in file_headers:
+            if h and h not in sample_headers:
+                sample_headers.append(h)
 
-        for row in rows:
+        for row in file_rows:
             loaded_rows += 1
-            k = _key_for_row(row)
-            if not k:
-                k = f"ROW::{loaded_rows}"
-            existing = merged_by_key.get(k)
+            raw_name = _sample_row_name(row)
+            key = _norm_name(raw_name) if raw_name else f"__NONAME__{loaded_rows}"
+            existing = sample_by_norm_name.get(key)
             if existing is None:
-                merged_by_key[k] = dict(row)
-                continue
-            for col, incoming in row.items():
-                if col not in existing:
-                    existing[col] = incoming
-                    continue
-                if _is_empty(existing.get(col)) and not _is_empty(incoming):
-                    existing[col] = incoming
+                sample_by_norm_name[key] = dict(row)
+            else:
+                # Accumulate columns; don't overwrite non-empty values.
+                for col, incoming in row.items():
+                    if col not in existing:
+                        existing[col] = incoming
+                    elif _is_empty(existing.get(col)) and not _is_empty(incoming):
+                        existing[col] = incoming
 
-    if not merged_by_key:
-        messagebox.showinfo("Merge Excel", "No mergeable rows found.", parent=self)
+    if not sample_by_norm_name:
+        messagebox.showinfo("Merge Excel", "No rows found in the selected file(s).", parent=self)
         return
 
-    preferred_order = [
-        # Name identity first (both summary + simulator naming variants)
-        "Applicant", "Client", "Client Name",
-        # Summary-tab columns
-        "Client ID", "PN", "Residence Address", "Office Address",
-        "Industry Name", "Spouse Info", "Personal Assets", "Business Assets",
-        "Business Inventory", "Source of Income", "Total Source Of Income",
-        "Business Expenses", "Total Business Expenses",
-        "Household / Personal Expenses", "Total Household / Personal Expenses",
-        "Total Net Income", "Total Amortization History",
-        "Total Current Amortization", "Loan Balance", "Principal Loan",
-        "Maturity", "Interest Rate", "Branch", "Loan Class", "Product Name",
-        "Loan Date", "Term Unit", "Term", "Security", "Release Tag",
-        "Loan Amount", "Loan Status", "AO Name",
-        # Simulator Client Impact columns
+    # ── Build merged output: exact requested column sequence ──────────
+    # Priority columns in the exact order the user specified.
+    # Columns from the sample file that match priority names are placed
+    # in their designated position; any remaining sample columns that
+    # don't appear in the priority list are appended at the end.
+    PRIORITY_COLS = [
+        "Client ID",
+        "PN",
+        "Applicant",           # maps from sample "Applicant" / simulator "Client"
         "Industry",
-        "Total Expenses (Base)", "Total Expenses (Sim)",
-        "Total Net Income (Base)", "Total Net Income (Sim)",
-        "% Increase", "Simulated Increase", "Total Current Amort",
-        "% Net → Amort", "Risk Label", "Risk Reasoning",
-    ]
-    ordered_headers = [h for h in preferred_order if h in all_headers] + [
-        h for h in all_headers if h not in preferred_order
+        "Total Expenses (Base)",
+        "Total Expenses (Sim)",
+        "Total Net Income (Base)",
+        "Total Net Income (Sim)",
+        "% Increase",
+        "Simulated Increase",
+        "Total Current Amortization",
+        "% Net → Amort",
+        "Loan Balance",
+        "Principal Loan",
+        "Maturity",
+        "Interest Rate",
+        "Branch",
+        "Loan Class",
+        "Product Name",
+        "Loan Date",
+        "Term Unit",
+        "Term",
+        "Security",
+        "Release Tag",
+        "Loan Amount",
+        "Loan Status",
+        "Risk Label",
+        "Risk Reasoning",
+        "AO Name",
     ]
 
+    # Internal impact columns that must be remapped to the priority names above.
+    # Old header → new header in PRIORITY_COLS
+    _COL_REMAP = {
+        "Client":                  "Applicant",
+        "Total Current Amort":     "Total Current Amortization",
+    }
+
+    # Re-key impact_rows so they use the remapped header names.
+    for _r in impact_rows:
+        for _old, _new in _COL_REMAP.items():
+            if _old in _r:
+                _r[_new] = _r.pop(_old)
+
+    # Re-key the lookup index (Client → Applicant in merged rows).
+    # (impact_by_norm_name keys are untouched — they are derived from the
+    #  original "Client" value before the remap loop above.)
+
+    # Build the set of all headers already covered by PRIORITY_COLS.
+    priority_set = set(PRIORITY_COLS)
+
+    # Remove sample-file name columns that duplicate "Applicant" / "Client".
+    _name_synonyms = {"Client", "Client Name", "Name"}
+
+    # Any sample-file headers not already in PRIORITY_COLS get appended after.
+    extra_sample_cols = [
+        h for h in sample_headers
+        if h not in priority_set and h not in _name_synonyms
+    ]
+
+    # Final ordered header list: priority columns first, then extras.
+    all_output_headers = PRIORITY_COLS + extra_sample_cols
+
+    # Patch impact_col_order so the header-colour logic below still works.
+    impact_col_order = PRIORITY_COLS
+
+    # ── Update impact_by_norm_name to use "Applicant" after remap ────
+    # impact_rows were re-keyed above; rebuild the lookup.
+    impact_by_norm_name_remapped: dict[str, dict] = {}
+    for row in impact_rows:
+        key = _norm_name(row.get("Applicant", ""))
+        if key:
+            impact_by_norm_name_remapped[key] = row
+
+    # Also update _name_synonyms to exclude "Applicant" from being a dup.
+    _name_synonyms_for_merge = {"Client", "Client Name", "Name"}
+
+    # Merge: iterate over Client Impact rows and enrich with sample data.
+    # Any sample rows with NO matching Client Impact row are appended at end.
+    merged_rows: list[dict] = []
+    matched_keys: set[str] = set()
+
+    for impact_row in impact_rows:
+        key = _norm_name(impact_row.get("Applicant", ""))
+        merged = dict(impact_row)  # start with all Client Impact columns
+
+        sample_row = sample_by_norm_name.get(key)
+        if sample_row:
+            matched_keys.add(key)
+            # Merge ALL sample columns into this row.
+            for col, val in sample_row.items():
+                # Skip name synonyms (already covered by "Applicant").
+                if col in _name_synonyms_for_merge:
+                    continue
+                # Map "Applicant" from sample to our "Applicant" column.
+                dest_col = col
+                if col == "Applicant":
+                    dest_col = "Applicant"
+                if dest_col not in merged:
+                    merged[dest_col] = val
+                elif _is_empty(merged.get(dest_col)) and not _is_empty(val):
+                    merged[dest_col] = val
+
+        merged_rows.append(merged)
+
+    # Append unmatched sample rows (names not found in Client Impact).
+    unmatched = 0
+    for key, sample_row in sample_by_norm_name.items():
+        if key in matched_keys or key.startswith("__NONAME__"):
+            continue
+        raw_name = _sample_row_name(sample_row)
+        row_out = {"Applicant": raw_name}
+        for col, val in sample_row.items():
+            if col in _name_synonyms_for_merge:
+                continue
+            if col not in row_out:
+                row_out[col] = val
+        merged_rows.append(row_out)
+        unmatched += 1
+
+    # Sort by highest % Net → Amort first (descending).
+    merged_rows.sort(key=lambda r: -(
+        float(str(r.get("% Net → Amort") or "0").replace("%", "").strip() or 0)
+    ))
+
+    # ── Save ─────────────────────────────────────────────────────────
     out_path = filedialog.asksaveasfilename(
         parent=self,
         title="Save Merged Excel",
         defaultextension=".xlsx",
         filetypes=[("Excel files", "*.xlsx"), ("All files", "*.*")],
-        initialfile="Merged_Summary.xlsx",
+        initialfile="ClientImpact_Merged.xlsx",
     )
     if not out_path:
         return
 
     wb = openpyxl.Workbook()
+    ws_cfg_merge = wb.create_sheet("Settings")
+    # Move the active (default) sheet to be the data sheet
     ws = wb.active
-    ws.title = "Merged Summary"
+    ws.title = "Client Impact Merged"
 
-    hdr_fill = PatternFill("solid", fgColor="93C47D")
-    hdr_font = Font(name="Roboto", bold=True, color="FFFFFF", size=10)
-    body_font = Font(name="Roboto", size=9)
-    left = Alignment(horizontal="left", vertical="top", wrap_text=True)
+    # ── Write combined Settings sheet (export info + formula/risk/expense/industry) ──
+    import getpass as _gp
+    from datetime import datetime as _dt2
+    _exp_by = str(getattr(self, "_current_username", "") or "").strip()
+    if not _exp_by:
+        try: _exp_by = (_gp.getuser() or "").strip()
+        except Exception: _exp_by = ""
+    if not _exp_by:
+        _exp_by = "Unknown user"
+    from pathlib import Path as _Path2
+    _sim_write_export_settings_sheet(
+        ws_cfg_merge,
+        self_app=self,
+        fname=_Path2(str(getattr(self, "_lu_filepath", "") or "—")).name,
+        generated_at=_dt2.now().strftime("%B %d, %Y  %H:%M"),
+        exported_by=_exp_by,
+        export_scope_note=(
+            "Merged Excel export — Client Impact simulator data merged with external file(s). "
+            f"Files merged: {len(paths)}."
+        ),
+    )
+    _used_rows_merge = ws_cfg_merge.max_row
+    _sim_write_settings_sheet(ws_cfg_merge, self_app=self, row_offset=_used_rows_merge + 1)
 
-    for ci, h in enumerate(ordered_headers, 1):
-        c = ws.cell(1, ci, h)
-        c.fill = hdr_fill
-        c.font = hdr_font
-        c.alignment = left
-        ws.column_dimensions[openpyxl.utils.get_column_letter(ci)].width = 22
+    # ── Modern style palette (teal/navy theme) ────────────────────────
+    _C_HDR_BG   = "1A3A5C"   # deep navy
+    _C_HDR_FG   = "FFFFFF"
+    _C_BAN_BG   = "14526E"   # teal-navy banner
+    _C_META_BG  = "EAF4F8"
+    _C_META_FG  = "14526E"
+    _C_ROW_ODD  = "FFFFFF"
+    _C_ROW_EVEN = "F2F8FC"   # subtle teal stripe
+    _C_HIGH_BG  = "FEF0EE"
+    _C_HIGH_FG  = "C0392B"
+    _C_MED_BG   = "FEFAE8"
+    _C_MED_FG   = "9A6700"
+    _C_LOW_BG   = "EDFAF1"
+    _C_LOW_FG   = "1E8449"
+    _C_NUM      = "1A6E8C"   # teal accent for numeric cells
+    _C_BORDER   = "C8D9E4"
 
-    out_rows = list(merged_by_key.values())
-    out_rows.sort(key=lambda r: (
-        _norm_text(r.get("Client ID")).upper(),
-        _norm_text(r.get("Applicant")).upper(),
-    ))
+    _thin_m  = Side(border_style="thin",   color=_C_BORDER)
+    _thick_m = Side(border_style="medium", color=_C_HDR_BG)
+    _grid_m  = Border(left=_thin_m, right=_thin_m, top=_thin_m, bottom=_thin_m)
+    _hdr_bot = Border(left=_thin_m, right=_thin_m, top=_thin_m, bottom=_thick_m)
 
-    for ri, row in enumerate(out_rows, 2):
-        for ci, h in enumerate(ordered_headers, 1):
-            cell = ws.cell(ri, ci, row.get(h, ""))
-            cell.font = body_font
-            cell.alignment = left
+    from datetime import datetime as _dt
+    _now_str = _dt.now().strftime("%B %d, %Y  %H:%M")
+    _total_cols = len(all_output_headers)
 
-    ws.freeze_panes = "A2"
+    # Row 1 — Title banner
+    ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=_total_cols)
+    _b = ws.cell(1, 1, "🧩  CLIENT IMPACT — Merged Report")
+    _b.fill      = PatternFill("solid", fgColor=_C_BAN_BG)
+    _b.font      = Font(bold=True, size=13, color=_C_HDR_FG, name="Calibri")
+    _b.alignment = Alignment(horizontal="left", vertical="center", indent=1)
+    ws.row_dimensions[1].height = 28
+
+    # Row 2 — Meta info
+    ws.merge_cells(start_row=2, start_column=1, end_row=2, end_column=_total_cols)
+    _m2 = ws.cell(2, 1,
+        f"Generated: {_now_str}     "
+        f"Client Impact rows: {len(impact_rows)}     "
+        f"Total columns: {_total_cols}"
+    )
+    _m2.fill      = PatternFill("solid", fgColor=_C_META_BG)
+    _m2.font      = Font(italic=True, size=9, color=_C_META_FG, name="Calibri")
+    _m2.alignment = Alignment(horizontal="left", vertical="center", indent=1)
+    ws.row_dimensions[2].height = 16
+
+    # Row 3 — Column headers
+    _hf = Font(bold=True, size=9, color=_C_HDR_FG, name="Calibri")
+    _ha = Alignment(horizontal="center", vertical="center", wrap_text=True)
+    for ci, h in enumerate(all_output_headers, 1):
+        cell = ws.cell(3, ci, h)
+        cell.fill      = PatternFill("solid", fgColor=_C_HDR_BG)
+        cell.font      = _hf
+        cell.alignment = _ha
+        cell.border    = _hdr_bot
+        ws.column_dimensions[get_column_letter(ci)].width = 22
+    ws.row_dimensions[3].height = 32
+
+    # Numeric / percentage column name sets for smart formatting
+    _NUM_COLS = {
+        "Total Expenses (Base)", "Total Expenses (Sim)",
+        "Total Net Income (Base)", "Total Net Income (Sim)",
+        "Simulated Increase", "Total Current Amortization",
+        "Loan Balance", "Principal Loan", "Loan Amount",
+    }
+    _PCT_COLS = {"% Increase", "% Net → Amort", "Interest Rate"}
+    NUM_FMT = '"₱"#,##0.00'
+    PCT_FMT = '0.0"%"'
+
+    _risk_colors = {
+        "HIGH":   (_C_HIGH_BG, _C_HIGH_FG, True),
+        "MEDIUM": (_C_MED_BG,  _C_MED_FG,  True),
+        "LOW":    (_C_LOW_BG,  _C_LOW_FG,  True),
+    }
+
+    # Data rows (start row 4)
+    for ri, row in enumerate(merged_rows):
+        row_num = 4 + ri
+        risk = str(row.get("Risk Label") or "").upper()
+        if risk in _risk_colors:
+            row_bg, _risk_fg, _bold_risk = _risk_colors[risk]
+        else:
+            row_bg   = _C_ROW_ODD if ri % 2 == 0 else _C_ROW_EVEN
+            _risk_fg = "374151"
+            _bold_risk = False
+
+        _rf        = PatternFill("solid", fgColor=row_bg)
+        _base_font = Font(size=9, color="374151", name="Calibri")
+        _num_font  = Font(size=9, color=_C_NUM,   name="Calibri")
+        _risk_font = Font(bold=True, size=9, color=_risk_fg, name="Calibri")
+        _al_l = Alignment(horizontal="left",   vertical="center", wrap_text=False)
+        _al_c = Alignment(horizontal="center", vertical="center")
+        _al_r = Alignment(horizontal="right",  vertical="center")
+
+        for ci, h in enumerate(all_output_headers, 1):
+            raw_val = row.get(h, "")
+            # Try to cast numeric/pct columns to float for proper Excel formatting
+            if h in _NUM_COLS:
+                try:
+                    cell_val = float(str(raw_val).replace("₱", "").replace(",", "").strip())
+                    cell_fmt = NUM_FMT
+                    cell_font = _num_font
+                    cell_align = _al_r
+                except Exception:
+                    cell_val = raw_val; cell_fmt = None
+                    cell_font = _base_font; cell_align = _al_l
+            elif h in _PCT_COLS:
+                try:
+                    cell_val = float(str(raw_val).replace("%", "").strip())
+                    cell_fmt = PCT_FMT
+                    cell_font = _base_font
+                    cell_align = _al_c
+                except Exception:
+                    cell_val = raw_val; cell_fmt = None
+                    cell_font = _base_font; cell_align = _al_c
+            elif h == "Risk Label":
+                cell_val = raw_val; cell_fmt = None
+                cell_font = _risk_font; cell_align = _al_c
+            else:
+                cell_val = raw_val; cell_fmt = None
+                cell_font = _base_font; cell_align = _al_l
+
+            c = ws.cell(row_num, ci, cell_val)
+            c.fill = _rf; c.font = cell_font
+            c.alignment = cell_align; c.border = _grid_m
+            if cell_fmt:
+                c.number_format = cell_fmt
+
+        ws.row_dimensions[row_num].height = 18
+
+    # ── TOTAL and AVERAGE summary rows ───────────────────────────────
+    _data_start_row = 4
+    _data_end_row   = 3 + len(merged_rows)
+    _total_row_num  = _data_end_row + 1
+    _avg_row_num    = _data_end_row + 2
+
+    _SUM_BG  = "1A3A5C"   # deep navy — matches header
+    _AVG_BG  = "1E4D7B"   # slightly lighter navy
+    _SUM_FG  = "FFFFFF"
+    _NUM_FG  = "A8D8EA"   # light teal for numbers in dark rows
+
+    _lbl_font_sum = Font(bold=True, size=9, color=_SUM_FG,  name="Calibri")
+    _lbl_font_avg = Font(bold=True, size=9, color=_SUM_FG,  name="Calibri")
+    _num_font_sum = Font(bold=True, size=9, color=_NUM_FG,  name="Calibri")
+    _num_font_avg = Font(bold=True, size=9, color=_NUM_FG,  name="Calibri")
+    _al_l2 = Alignment(horizontal="left",   vertical="center")
+    _al_r2 = Alignment(horizontal="right",  vertical="center")
+    _al_c2 = Alignment(horizontal="center", vertical="center")
+
+    _thin_s  = Side(border_style="thin",   color="4A7BAD")
+    _thick_t = Side(border_style="medium", color="A8D8EA")
+    _sum_border = Border(left=_thin_s, right=_thin_s,
+                         top=_thick_t, bottom=_thin_s)
+    _avg_border = Border(left=_thin_s, right=_thin_s,
+                         top=_thin_s,  bottom=_thick_t)
+
+    def _write_summary_row(row_n, label, bg, lbl_font, num_font, border):
+        rf = PatternFill("solid", fgColor=bg)
+        for ci2, h2 in enumerate(all_output_headers, 1):
+            c2 = ws.cell(row_n, ci2)
+            c2.fill   = rf
+            c2.border = border
+            if ci2 == 1:
+                c2.value     = label
+                c2.font      = lbl_font
+                c2.alignment = _al_l2
+            elif h2 in _NUM_COLS:
+                col_letter = get_column_letter(ci2)
+                if label == "TOTAL":
+                    c2.value = f"=SUM({col_letter}{_data_start_row}:{col_letter}{_data_end_row})"
+                else:
+                    c2.value = f"=AVERAGE({col_letter}{_data_start_row}:{col_letter}{_data_end_row})"
+                c2.number_format = NUM_FMT
+                c2.font      = num_font
+                c2.alignment = _al_r2
+            elif h2 in _PCT_COLS:
+                col_letter = get_column_letter(ci2)
+                if label == "TOTAL":
+                    c2.value = ""   # totalling % doesn't make sense
+                else:
+                    c2.value = f"=AVERAGE({col_letter}{_data_start_row}:{col_letter}{_data_end_row})"
+                c2.number_format = PCT_FMT
+                c2.font      = num_font
+                c2.alignment = _al_c2
+            else:
+                c2.value     = ""
+                c2.font      = lbl_font
+                c2.alignment = _al_l2
+        ws.row_dimensions[row_n].height = 18
+
+    _write_summary_row(_total_row_num, "TOTAL",   _SUM_BG, _lbl_font_sum, _num_font_sum, _sum_border)
+    _write_summary_row(_avg_row_num,   "AVERAGE", _AVG_BG, _lbl_font_avg, _num_font_avg, _avg_border)
+
+    ws.freeze_panes = "A4"
+    ws.auto_filter.ref = f"A3:{get_column_letter(_total_cols)}{3 + len(merged_rows)}"
+
     wb.save(out_path)
+    matched_count = len(impact_rows) - sum(
+        1 for r in impact_rows if _norm_name(r.get("Applicant", "")) not in matched_keys
+    )
     messagebox.showinfo(
         "Merge Complete",
-        f"Merged {len(paths)} file(s)\n"
-        f"Input rows: {loaded_rows}\n"
-        f"Output rows: {len(out_rows)}\n\n"
+        f"Merged {len(paths)} file(s) into Client Impact table\n"
+        f"Client Impact rows:  {len(impact_rows)}\n"
+        f"Matched by name:     {matched_count}\n"
+        f"Unmatched (appended): {unmatched}\n"
+        f"Output columns:      {len(all_output_headers)}\n\n"
         f"Saved to:\n{out_path}",
         parent=self,
     )
@@ -2775,7 +3838,6 @@ def _sim_export_high_risk_clients_excel(self):
         import openpyxl
         from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
         from openpyxl.utils import get_column_letter
-        from lu_loanbal_export_patch import _write_configuration_settings_sheet
     except ImportError:
         messagebox.showerror(
             "Missing Library",
@@ -2888,7 +3950,7 @@ def _sim_export_high_risk_clients_excel(self):
         )
         return
 
-    # Sort: largest amort ratio first (all HIGH, so sort by ratio descending).
+    # Sort by highest % Net → Amort first (descending).
     high_risk_rows.sort(key=lambda r: -(r["pct_net_to_amort"] or 0.0))
 
     from tkinter import filedialog
@@ -2909,7 +3971,7 @@ def _sim_export_high_risk_clients_excel(self):
 
     wb = openpyxl.Workbook()
     ws_cfg = wb.active
-    ws_cfg.title = "Export settings"
+    ws_cfg.title = "Settings"
 
     exported_by = str(getattr(self, "_current_username", "") or "").strip()
     if not exported_by:
@@ -2924,135 +3986,135 @@ def _sim_export_high_risk_clients_excel(self):
     industry_note = "None (no industry filter)" if not selected_inds else " · ".join(selected_inds)
     search_note = _search_term if _search_term else "None"
 
-    _write_configuration_settings_sheet(
+    _sim_write_export_settings_sheet(
         ws_cfg,
+        self_app=self,
         fname=Path(str(getattr(self, "_lu_filepath", "") or "—")).name,
         generated_at=datetime.now().strftime("%B %d, %Y  %H:%M"),
         exported_by=exported_by,
         export_scope_note=(
             "HIGH Risk Clients export — includes only clients with % Net → Amort ≥ 71% "
-            "under current simulator what-if values. "
-            f"Industry filter: {industry_note}. Client search: {search_note}."
+            f"under current simulator what-if values. Client search: {search_note}."
         ),
     )
+
+    # ── Append formula/risk/expense/industry sections to the same sheet ──
+    _used_rows_hr = ws_cfg.max_row
+    _sim_write_settings_sheet(ws_cfg, self_app=self, row_offset=_used_rows_hr + 1)
 
     # HIGH Risk Clients sheet.
     ws = wb.create_sheet("HIGH Risk Clients")
     NUM_COLS = 21
 
-    # ── Banner row (row 1) ────────────────────────────────────────────
-    BANNER_COLOR = "C0392B"
-    BANNER_TEXT  = "HIGH RISK CLIENTS — % Net Income to Amortization ≥ 71%"
-    ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=NUM_COLS)
-    banner_cell = ws.cell(1, 1, BANNER_TEXT)
-    banner_cell.fill      = PatternFill("solid", fgColor=BANNER_COLOR)
-    banner_cell.font      = Font(bold=True, size=11, color="FFFFFF")
-    banner_cell.alignment = Alignment(horizontal="center", vertical="center")
-    ws.row_dimensions[1].height = 22
+    # ── Shared modern style palette (red/danger theme) ────────────────
+    _C_HDR_BG  = "7B1A14"   # deep crimson header
+    _C_HDR_FG  = "FFFFFF"
+    _C_BAN_BG  = "A93226"   # banner crimson
+    _C_BAN_FG  = "FFFFFF"
+    _C_META_BG = "FDFEFE"
+    _C_META_FG = "7B241C"
+    _C_ROW_ODD  = "FFFFFF"
+    _C_ROW_EVEN = "FEF9F9"   # very faint rose stripe
+    _C_HIGH_BG  = "FDECEA"
+    _C_HIGH_FG  = "C0392B"
+    _C_BORDER   = "E8C8C5"
+    _C_NUM      = "A93226"   # numbers in crimson accent
 
-    # ── Summary row (row 2) ───────────────────────────────────────────
+    _thin_r  = Side(border_style="thin",   color=_C_BORDER)
+    _thick_r = Side(border_style="medium", color=_C_HDR_BG)
+    _grid_r  = Border(left=_thin_r, right=_thin_r, top=_thin_r, bottom=_thin_r)
+    _hdr_bot = Border(left=_thin_r, right=_thin_r, top=_thin_r, bottom=_thick_r)
+
+    NUM_FMT = '"₱"#,##0.00'
+    PCT_FMT = '0.0"%"'
+
+    # Row 1 — Title banner
+    ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=NUM_COLS)
+    _bann = ws.cell(1, 1, "🔴  HIGH RISK CLIENTS — % Net Income to Amortization ≥ 71%")
+    _bann.fill      = PatternFill("solid", fgColor=_C_BAN_BG)
+    _bann.font      = Font(bold=True, size=13, color=_C_BAN_FG, name="Calibri")
+    _bann.alignment = Alignment(horizontal="left", vertical="center", indent=1)
+    ws.row_dimensions[1].height = 28
+
+    # Row 2 — Meta info
     ws.merge_cells(start_row=2, start_column=1, end_row=2, end_column=NUM_COLS)
     summary_text = (
         f"Total HIGH risk clients: {len(high_risk_rows)}     "
         f"Exported: {datetime.now().strftime('%B %d, %Y  %H:%M')}     "
         f"Exported by: {exported_by}"
     )
-    summary_cell = ws.cell(2, 1, summary_text)
-    summary_cell.fill      = PatternFill("solid", fgColor="FADBD8")
-    summary_cell.font      = Font(italic=True, size=9, color="7B241C")
-    summary_cell.alignment = Alignment(horizontal="left", vertical="center", indent=1)
+    _m2 = ws.cell(2, 1, summary_text)
+    _m2.fill      = PatternFill("solid", fgColor=_C_META_BG)
+    _m2.font      = Font(italic=True, size=9, color=_C_META_FG, name="Calibri")
+    _m2.alignment = Alignment(horizontal="left", vertical="center", indent=1)
     ws.row_dimensions[2].height = 16
 
-    # ── Header row (row 3) ────────────────────────────────────────────
+    # Row 3 — Column headers
     headers = [
-        "Client ID",
-        "PN",
-        "Client",
-        "Residence Address",
-        "Office Address",
-        "Industry",
-        "Loan Status",
-        "AO Name",
-        "Product Name",
-        "Loan Balance",
-        "Principal Loan",
-        "Total Expenses (Base)",
-        "Total Expenses (Sim)",
-        "Total Net Income (Base)",
-        "Total Net Income (Sim)",
-        "% Increase",
-        "Simulated Increase",
-        "Total Current Amort",
-        "% Net → Amort",
-        "Risk Label",
-        "Risk Reasoning",
+        "Client ID", "PN", "Client", "Residence Address", "Office Address",
+        "Industry", "Loan Status", "AO Name", "Product Name",
+        "Loan Balance", "Principal Loan",
+        "Total Expenses (Base)", "Total Expenses (Sim)",
+        "Total Net Income (Base)", "Total Net Income (Sim)",
+        "% Increase", "Simulated Increase",
+        "Total Current Amort", "% Net → Amort",
+        "Risk Label", "Risk Reasoning",
     ]
-
-    HDR_FILL  = PatternFill("solid", fgColor="922B21")
-    HDR_FONT  = Font(bold=True, size=10, color="FFFFFF")
-    HDR_ALIGN = Alignment(horizontal="center", vertical="center", wrap_text=True)
-    thin_side  = Side(style="thin", color="D5D8DC")
-    cell_border = Border(left=thin_side, right=thin_side, top=thin_side, bottom=thin_side)
-
+    _hf  = Font(bold=True, size=9, color=_C_HDR_FG, name="Calibri")
+    _ha  = Alignment(horizontal="center", vertical="center", wrap_text=True)
     for ci, h in enumerate(headers, 1):
         cell = ws.cell(3, ci, h)
-        cell.fill      = HDR_FILL
-        cell.font      = HDR_FONT
-        cell.alignment = HDR_ALIGN
-        cell.border    = cell_border
-    ws.row_dimensions[3].height = 30
+        cell.fill      = PatternFill("solid", fgColor=_C_HDR_BG)
+        cell.font      = _hf
+        cell.alignment = _ha
+        cell.border    = _hdr_bot
+    ws.row_dimensions[3].height = 32
 
-    # ── Column widths ─────────────────────────────────────────────────
-    col_widths = [14, 14, 24, 24, 24, 18, 16, 18, 20, 16, 16, 18, 18, 20, 20, 12, 18, 18, 12, 12, 52]
+    # Column widths
+    col_widths = [13, 13, 24, 22, 22, 18, 14, 18, 20, 15, 15, 18, 18, 18, 18, 11, 17, 17, 13, 12, 48]
     for ci, w in enumerate(col_widths, 1):
         ws.column_dimensions[get_column_letter(ci)].width = w
 
-    NUM_FMT = '"₱"#,##0.00'
-    PCT_FMT = '0.0"%"'
-
-    FILL_ODD       = PatternFill("solid", fgColor="FDEDEC")
-    FILL_EVEN      = PatternFill("solid", fgColor="FFFFFF")
-    DATA_FONT      = Font(size=9, color="1A252F")
-    DATA_FONT_BOLD = Font(bold=True, size=9, color="C0392B")
-    DATA_ALIGN_L   = Alignment(horizontal="left",   vertical="center", wrap_text=True)
-    DATA_ALIGN_C   = Alignment(horizontal="center", vertical="center")
-    DATA_ALIGN_R   = Alignment(horizontal="right",  vertical="center")
-
+    # Data rows (start row 4)
     for idx, r in enumerate(high_risk_rows):
         row_num  = 4 + idx
-        row_fill = FILL_ODD if idx % 2 == 0 else FILL_EVEN
+        row_bg   = _C_ROW_ODD if idx % 2 == 0 else _C_ROW_EVEN
+        _rf      = PatternFill("solid", fgColor=row_bg)
+        _base_f  = Font(size=9, color="374151", name="Calibri")
+        _num_f   = Font(size=9, color=_C_NUM,   name="Calibri")
+        _risk_f  = Font(bold=True, size=9, color=_C_HIGH_FG, name="Calibri")
+        _al_l    = Alignment(horizontal="left",   vertical="center", wrap_text=False)
+        _al_c    = Alignment(horizontal="center", vertical="center")
+        _al_r    = Alignment(horizontal="right",  vertical="center")
 
-        def _dc(col, value, fmt=None, align=DATA_ALIGN_R, font=DATA_FONT):
+        def _dc(col, value, font=_base_f, align=_al_l, fmt=None):
             cell = ws.cell(row_num, col, value)
-            cell.fill      = row_fill
-            cell.font      = font
-            cell.border    = cell_border
-            cell.alignment = align
-            if fmt:
-                cell.number_format = fmt
+            cell.fill = _rf; cell.font = font
+            cell.border = _grid_r; cell.alignment = align
+            if fmt: cell.number_format = fmt
             return cell
 
-        _dc(1,  r["client_id"] or "—",   align=DATA_ALIGN_L)
-        _dc(2,  r["pn"] or "—",          align=DATA_ALIGN_L)
-        _dc(3,  r["client"],             align=DATA_ALIGN_L)
-        _dc(4,  r["residence_address"] or "—", align=DATA_ALIGN_L)
-        _dc(5,  r["office_address"] or "—",    align=DATA_ALIGN_L)
-        _dc(6,  r["industry"],           align=DATA_ALIGN_L)
-        _dc(7,  r["loan_status"] or "—", align=DATA_ALIGN_L)
-        _dc(8,  r["ao_name"] or "—",     align=DATA_ALIGN_L)
-        _dc(9,  r["product_name"] or "—",align=DATA_ALIGN_L)
-        _dc(10, r["loan_balance"],       fmt=NUM_FMT)
-        _dc(11, r["principal_loan"],     fmt=NUM_FMT)
-        _dc(12, r["base_total_expenses"],fmt=NUM_FMT)
-        _dc(13, r["sim_total_expenses"], fmt=NUM_FMT)
-        _dc(14, r["net_income"],         fmt=NUM_FMT)
-        _dc(15, r["sim_net_income"],     fmt=NUM_FMT)
-        _dc(16, r["pct_increase"],       fmt=PCT_FMT, align=DATA_ALIGN_C)
-        _dc(17, r["sim_increase"],       fmt=NUM_FMT)
-        _dc(18, r["current_amort"],      fmt=NUM_FMT)
-        _dc(19, r["pct_net_to_amort"],   fmt=PCT_FMT, align=DATA_ALIGN_C)
-        _dc(20, r["sim_risk_label"],     align=DATA_ALIGN_C, font=DATA_FONT_BOLD)
-        _dc(21, r["risk_reasoning"],     align=DATA_ALIGN_L)
+        _dc(1,  r["client_id"] or "—")
+        _dc(2,  r["pn"] or "—")
+        _dc(3,  r["client"])
+        _dc(4,  r["residence_address"] or "—")
+        _dc(5,  r["office_address"] or "—")
+        _dc(6,  r["industry"])
+        _dc(7,  r["loan_status"] or "—",       align=_al_c)
+        _dc(8,  r["ao_name"] or "—")
+        _dc(9,  r["product_name"] or "—")
+        _dc(10, r["loan_balance"],              font=_num_f, align=_al_r, fmt=NUM_FMT)
+        _dc(11, r["principal_loan"],            font=_num_f, align=_al_r, fmt=NUM_FMT)
+        _dc(12, r["base_total_expenses"],       font=_num_f, align=_al_r, fmt=NUM_FMT)
+        _dc(13, r["sim_total_expenses"],        font=_num_f, align=_al_r, fmt=NUM_FMT)
+        _dc(14, r["net_income"],                font=_num_f, align=_al_r, fmt=NUM_FMT)
+        _dc(15, r["sim_net_income"],            font=_num_f, align=_al_r, fmt=NUM_FMT)
+        _dc(16, r["pct_increase"],              font=_base_f, align=_al_c, fmt=PCT_FMT)
+        _dc(17, r["sim_increase"],              font=_num_f, align=_al_r, fmt=NUM_FMT)
+        _dc(18, r["current_amort"],             font=_num_f, align=_al_r, fmt=NUM_FMT)
+        _dc(19, r["pct_net_to_amort"],          font=_base_f, align=_al_c, fmt=PCT_FMT)
+        _dc(20, r["sim_risk_label"],            font=_risk_f, align=_al_c)
+        _dc(21, r["risk_reasoning"],            align=Alignment(horizontal="left", vertical="center", wrap_text=True))
         ws.row_dimensions[row_num].height = 18
 
     ws.freeze_panes = "A4"
