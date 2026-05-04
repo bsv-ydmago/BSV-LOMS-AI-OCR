@@ -1642,7 +1642,7 @@ def _build_lookup_summary_panel(self, parent):
     self._sum_clear_all_btn.pack(side="left")
 
     self._sum_import_ploan_btn = ctk.CTkButton(
-        btn_block, text="⬆  P.Loan", command=lambda: _import_ploan_file(self),
+        btn_block, text="⬆ LoanList", command=lambda: _import_ploan_file(self),
         width=74, height=30, corner_radius=6, fg_color="#1A4A3C",
         hover_color="#256050", text_color="#A0FFD8",
         font=FF(8, "bold"), border_width=0)

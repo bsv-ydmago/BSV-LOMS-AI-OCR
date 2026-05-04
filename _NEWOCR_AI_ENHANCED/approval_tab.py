@@ -613,21 +613,26 @@ def _open_review_popup(self, row: dict):
 
     popup = tk.Toplevel(self)
     popup.title("Review Edit Request")
-    popup.configure(bg=NAVY_DEEP)
+    popup.configure(bg="#0B1622")
     popup.resizable(False, False)
     popup.grab_set()
 
-    PW, PH = 580, 600
+    PW, PH = 800, 640
     self.update_idletasks()
     rx = self.winfo_rootx() + (self.winfo_width()  - PW) // 2
     ry = self.winfo_rooty() + (self.winfo_height() - PH) // 2
     popup.geometry(f"{PW}x{PH}+{rx}+{ry}")
 
     # ── Scrollable main area ──────────────────────────────────────────
-    main_canvas = tk.Canvas(popup, bg=NAVY_DEEP, highlightthickness=0)
+    root_frame = tk.Frame(popup, bg="#0B1622",
+                      highlightbackground="#5BBF3E",
+                      highlightthickness=2)
+    root_frame.pack(fill="both", expand=True)
+
+    main_canvas = tk.Canvas(root_frame, bg="#0B1622", highlightthickness=0)
     main_canvas.pack(fill="both", expand=True)
 
-    scroll_frame = tk.Frame(main_canvas, bg=NAVY_DEEP)
+    scroll_frame = tk.Frame(main_canvas, bg="#0B1622")
     _sc_win = main_canvas.create_window((0, 0), window=scroll_frame, anchor="nw")
 
     def _on_frame_configure(e):
@@ -639,38 +644,51 @@ def _open_review_popup(self, row: dict):
     main_canvas.bind("<Configure>", _on_canvas_configure)
 
     # ── Header strip ──────────────────────────────────────────────────
-    hdr = tk.Frame(scroll_frame, bg=NAVY_LIGHT)
-    hdr.pack(fill="x")
+    hdr = tk.Frame(scroll_frame, bg="#0B1622")
+    hdr.pack(fill="x", padx=16, pady=(18, 4))
 
-    tk.Frame(hdr, bg=_SB_ACCENT, width=5).pack(side="left", fill="y")
+    sb_hdr = tk.Frame(hdr, bg="#0B1622")
+    sb_hdr.pack(fill="x")
+    tk.Label(sb_hdr, text="⚙", font=("Segoe UI Emoji", 16),
+            fg="#5BBF3E", bg="#0B1622").pack(side="left", padx=(0, 8))
 
-    hdr_inner = tk.Frame(hdr, bg=NAVY_LIGHT)
-    hdr_inner.pack(side="left", fill="y", padx=20, pady=14)
+    sb_tc = tk.Frame(sb_hdr, bg="#0B1622")
+    sb_tc.pack(side="left")
+    tk.Label(sb_tc, text="REVIEW",
+            font=("Segoe UI", 8, "bold"), fg="#4A6480",
+            bg="#0B1622", anchor="w").pack(anchor="w")
+    tk.Label(sb_tc, text=f"Edit Request  #{ row.get('id','—') }",
+            font=("Segoe UI", 11, "bold"), fg="#EEF3FA",
+            bg="#0B1622", anchor="w").pack(anchor="w")
 
-    tk.Label(hdr_inner, text="Review Edit Request",
-             font=_F(self, 14, "bold"), fg=WHITE, bg=NAVY_LIGHT).pack(anchor="w")
-    tk.Label(hdr_inner, text=f"Request ID #{row.get('id', '—')}  ·  {row.get('requested_at', '—')}",
-             font=_F(self, 8), fg=TXT_MUTED, bg=NAVY_LIGHT).pack(anchor="w", pady=(2, 0))
+    tk.Label(hdr,
+            text=f"Submitted {row.get('requested_at','—')}",
+            font=("Segoe UI", 8), fg="#4A6480", bg="#0B1622",
+            justify="left", anchor="w").pack(anchor="w", pady=(4, 0))
+
+    tk.Frame(scroll_frame, bg="#1A2F47", height=1).pack(fill="x", padx=12, pady=(0, 6))
 
     # Status badge in header
     bbg, bfg = _status_color(row.get("status", ""))
-    tk.Label(hdr, text=row.get("status", "—").capitalize(),
-             font=_F(self, 8, "bold"), fg=bfg, bg=bbg,
-             padx=10, pady=4).pack(side="right", padx=20, pady=18)
+    status_pill = tk.Frame(scroll_frame, bg="#0B1622")
+    status_pill.pack(anchor="w", padx=20, pady=(0, 8))
+    tk.Label(status_pill, text=row.get("status","—").capitalize(),
+            font=("Segoe UI", 8, "bold"), fg=bfg, bg=bbg,
+            padx=10, pady=3).pack()
 
     # ── Section: Request Info ─────────────────────────────────────────
     def _section_label(parent, text):
-        sec = tk.Frame(parent, bg=NAVY_DEEP)
+        sec = tk.Frame(parent, bg="#0B1622")
         sec.pack(fill="x", padx=20, pady=(16, 6))
-        tk.Label(sec, text=text, font=_F(self, 7, "bold"),
-                 fg=TXT_MUTED, bg=NAVY_DEEP).pack(side="left")
-        tk.Frame(sec, bg="#1E3A5F", height=1).pack(
+        tk.Label(sec, text=text, font=("Segoe UI", 7, "bold"),
+                fg="#2D4F7A", bg="#0B1622").pack(side="left")
+        tk.Frame(sec, bg="#1A2F47", height=1).pack(
             side="left", fill="x", expand=True, padx=(10, 0), pady=1)
 
     _section_label(scroll_frame, "REQUEST DETAILS")
 
-    info_card = tk.Frame(scroll_frame, bg="#0F2030",
-                         highlightbackground="#1E3A5F", highlightthickness=1)
+    info_card = tk.Frame(scroll_frame, bg="#162438",
+                     highlightbackground="#5BBF3E", highlightthickness=1)
     info_card.pack(fill="x", padx=20)
 
     _info = [
@@ -682,7 +700,7 @@ def _open_review_popup(self, row: dict):
     ]
 
     for idx, (label, value) in enumerate(_info):
-        row_bg = "#0F2030" if idx % 2 == 0 else "#112234"
+        row_bg = "#162438" if idx % 2 == 0 else "#1A2F47"
         rf = tk.Frame(info_card, bg=row_bg)
         rf.pack(fill="x")
         if idx > 0:
@@ -775,12 +793,11 @@ def _open_review_popup(self, row: dict):
         main_canvas.yview_moveto(1.0)
 
     # ── Buttons (fixed at bottom, outside scroll) ─────────────────────
-    btn_outer = tk.Frame(popup, bg="#09151F")
+    tk.Frame(root_frame, bg="#1A2F47", height=1).pack(fill="x", side="bottom")
+    btn_outer = tk.Frame(root_frame, bg="#0B1622")
     btn_outer.pack(fill="x", side="bottom")
 
-    tk.Frame(btn_outer, bg=NAVY_MID, height=1).pack(fill="x")
-
-    btn_row = tk.Frame(btn_outer, bg="#09151F")
+    btn_row = tk.Frame(btn_outer, bg="#0B1622")
     btn_row.pack(fill="x", padx=20, pady=12)
 
     # Keep references so we can swap them
@@ -817,8 +834,8 @@ def _open_review_popup(self, row: dict):
             btn_row, text="← Back",
             command=lambda: _cancel_reject(),
             height=36, corner_radius=7,
-            fg_color=NAVY_MIST, hover_color=NAVY_GHOST,
-            text_color=NAVY_MID, font=_F(self, 9),
+            fg_color="#C8D8E8", hover_color="#B0C4D8",
+            text_color="#1A2F47", font=_F(self, 9),
             border_width=1, border_color=BORDER_MID
         )
         back_btn.pack(side="left")
@@ -861,8 +878,8 @@ def _open_review_popup(self, row: dict):
             btn_row, text="Cancel",
             command=popup.destroy,
             height=36, corner_radius=7,
-            fg_color=NAVY_MIST, hover_color=NAVY_GHOST,
-            text_color=NAVY_MID, font=_F(self, 9),
+            fg_color="#C8D8E8", hover_color="#B0C4D8",
+            text_color="#1A2F47", font=_F(self, 9),
             border_width=1, border_color=BORDER_MID
         ).pack(side="right")
 
