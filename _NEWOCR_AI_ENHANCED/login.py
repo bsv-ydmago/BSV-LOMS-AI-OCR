@@ -19,8 +19,6 @@ import os
 from PIL import Image, ImageTk
 import psycopg2
 import json
-import pygame
-pygame.mixer.init()
 
 # ── Palette ────────────────────────────────────────────────────────────────────
 APP_BG         = "#0F1520"
@@ -195,8 +193,6 @@ class LoginWindow(tk.Tk):
         self._dx = self._dy = 0
         self._build()
         self.bind_all("<Return>", lambda _: self._login())
-
-        self._fail_count = 0
 
         # ── Load remembered email ─────────────────────────────────────
         remembered = _load_remembered()
@@ -378,26 +374,8 @@ class LoginWindow(tk.Tk):
         fr = tk.Frame(f, bg=WHITE)
         fr.pack(fill="x", pady=(6, 10))
 
-        tk.Label(fr, text="Forgot password?",
-                 bg=WHITE, fg=BSV_GREEN_D, cursor="hand2",
-                 font=(FUI, 8)).pack(side="right")
-
         # ── Remember Me — same row as Forgot password ─────────────────
         self._remember_var = tk.BooleanVar(value=False)
-
-        def _on_remember(*_):
-            if self._remember_var.get():
-                try:
-                    base = os.path.dirname(os.path.abspath(__file__))
-                    pygame.mixer.music.load(os.path.join(base, "sounds", "coco.mp3"))
-                    pygame.mixer.music.play()
-                except Exception as ex:
-                    print(f"Sound error: {ex}")
-            else:
-                pygame.mixer.music.stop()
-
-        self._remember_var.trace_add("write", _on_remember)
-
         tk.Checkbutton(fr, text="Remember me",
                        variable=self._remember_var,
                        bg=WHITE, fg=TEXT_SOFT,
@@ -550,7 +528,6 @@ class LoginWindow(tk.Tk):
         elif result == "INACTIVE":
             self._show_popup("Your account is inactive.\nPlease contact the administrator.")
         elif result:
-            self._fail_count = 0
             user_id, username = result
             # ── Save or clear remembered email ────────────────────────
             if self._remember_var.get():
@@ -561,22 +538,8 @@ class LoginWindow(tk.Tk):
             self.destroy()
             self._ok(user_id, username)
         else:
-            self._fail_count += 1
-            self._play_fail_sound()
             self._errlbl.config(
                 text="⚠  Incorrect username or password.")
-    
-    def _play_fail_sound(self):
-        base = os.path.dirname(os.path.abspath(__file__))
-        if self._fail_count >= 3:
-            sound = os.path.join(base, "sounds", "siren.mp3")
-        else:
-            sound = os.path.join(base, "sounds", "fahh.mp3")
-        try:
-            pygame.mixer.music.load(sound)
-            pygame.mixer.music.play()
-        except Exception as ex:
-            print(f"Sound error: {ex}")
     
     def _show_popup(self, message: str):
         popup = tk.Toplevel(self)

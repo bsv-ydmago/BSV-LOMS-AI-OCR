@@ -675,7 +675,7 @@ def _open_role_tabs_dialog(self):
     dlg.resizable(False, False)
     dlg.overrideredirect(True)
     dlg.grab_set()
-    _center_dialog(dlg, 800, 640)
+    _center_dialog(dlg, 850, 600)
     def _on_close():
         # Clean up traces before destroying
         for (v, tid) in getattr(dlg, '_tab_traces', []):
@@ -699,7 +699,7 @@ def _open_role_tabs_dialog(self):
     # ══════════════════════════════════════════════════════════════════════
     #  LEFT SIDEBAR
     # ══════════════════════════════════════════════════════════════════════
-    sidebar = tk.Frame(root_frame, bg="#0B1622", width=230)
+    sidebar = tk.Frame(root_frame, bg="#0B1622", width=265)
     sidebar.pack(side="left", fill="y")
     sidebar.pack_propagate(False)
 
@@ -808,13 +808,13 @@ def _open_role_tabs_dialog(self):
 
     # Footer with Save / Cancel
     tk.Frame(right, bg="#E8ECF2", height=1).pack(fill="x", pady=(6, 0))
-    footer_bar = tk.Frame(right, bg="#FFFFFF")
+    footer_bar = tk.Frame(right, bg="#F4F6FA")
     footer_bar.pack(fill="x", padx=20, pady=10)
 
     tk.Label(footer_bar,
              text="Changes apply on next login.",
              font=("Segoe UI", 8, "italic"),
-             fg="#8A9BB0", bg="#FFFFFF").pack(side="left")
+             fg="#8A9BB0", bg="#F4F6FA").pack(side="left")
 
     # ── SAVE ──────────────────────────────────────────────────────────────
     def _save():
@@ -894,7 +894,7 @@ def _open_role_tabs_dialog(self):
 
     ctk.CTkButton(footer_bar, text="💾  Save Configuration",
                   command=_save,
-                  width=180, height=36, corner_radius=7,
+                  width=160, height=36, corner_radius=7,
                   fg_color="#5BBF3E", hover_color="#4CAF35",
                   text_color="#0A1628",
                   font=("Segoe UI", 10, "bold")).pack(side="right", padx=(8, 0))
@@ -920,7 +920,7 @@ def _open_role_tabs_dialog(self):
                 w.destroy()
             return
 
-        display = rs["current"]
+        display = rs["current"].title()
         right_title_lbl.config(text=display)
         hint_lbl.config(
             text=f'Tabs visible to  "{display}"  role:')
@@ -1092,7 +1092,7 @@ def _open_role_tabs_dialog(self):
                      fg="#5BBF3E" if is_act else "#4A6480",
                      bg=p_bg, width=3).pack(side="left", padx=(10, 4))
 
-            name_var = tk.StringVar(value=rs["current"])
+            name_var = tk.StringVar(value=rs["current"].title())
             name_lbl = tk.Label(
                 pill, textvariable=name_var,
                 font=("Segoe UI", 9, "bold") if is_act else ("Segoe UI", 9),
@@ -1122,13 +1122,21 @@ def _open_role_tabs_dialog(self):
                 _rebuild_pills()
                 _refresh_right()
 
-            def _p_enter(e=None, p=pill, n=name_lbl, o=orig):
+            def _p_enter(e=None, p=pill, s=stripe, o=orig):
                 if selected_orig.get() != o:
-                    for w in (p, n): w.config(bg="#131D2D")
+                    p.config(bg="#131D2D")
+                    for w in p.winfo_children():
+                        if w is not s:
+                            try: w.config(bg="#131D2D")
+                            except: pass
 
-            def _p_leave(e=None, p=pill, n=name_lbl, o=orig):
+            def _p_leave(e=None, p=pill, s=stripe, bg=p_bg, o=orig):
                 if selected_orig.get() != o:
-                    for w in (p, n): w.config(bg="#0B1622")
+                    p.config(bg=bg)
+                    for w in p.winfo_children():
+                        if w is not s:
+                            try: w.config(bg=bg)
+                            except: pass
 
             for w in (pill, name_lbl):
                 w.bind("<Button-1>", _activate)
@@ -1164,11 +1172,11 @@ def _open_role_tabs_dialog(self):
                     new_name = ent_var.get().strip()
                     if new_name:
                         rs_ref["current"] = new_name
-                        nv.set(new_name)
+                        nv.set(new_name.title())
                         if selected_orig.get() == rs_ref["original"]:
-                            right_title_lbl.config(text=new_name)
+                            right_title_lbl.config(text=new_name.title())
                             hint_lbl.config(
-                                text=f'Tabs visible to  "{new_name}"  role:')
+                                text=f'Tabs visible to  "{new_name.title()}"  role:')
                     pop.destroy()
 
                 ok_lbl = tk.Label(inner, text="✔",
