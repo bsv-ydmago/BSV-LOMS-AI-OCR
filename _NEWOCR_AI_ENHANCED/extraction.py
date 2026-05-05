@@ -84,6 +84,7 @@ import numpy as np
 import re
 import re as _re
 import tempfile
+import time
 import threading                          # SP-1 SP-2
 from concurrent.futures import (          # SP-1 SP-2
     ThreadPoolExecutor, as_completed
@@ -1166,12 +1167,13 @@ def _ocr_attempt(
                 _cb(90, f"Stage 3: VLM complete ({_vlm_model})…")
                 break
             except Exception as _e:
-                if ("429" in str(_e)
-                        or "quota" in str(_e).lower()
-                        or "resource_exhausted" in str(_e).lower()):
+                if _gemini_error_is_transient(_e):
                     logger.warning(
-                        "VLM model %s quota hit — trying next model", _vlm_model
+                        "VLM model %s transient error — trying fallback: %s",
+                        _vlm_model,
+                        _e,
                     )
+                    time.sleep(min(2.0, 0.5 + 0.5 * _VLM_MODELS.index(_vlm_model)))
                     continue
                 raise
 
@@ -1918,6 +1920,36 @@ def _normalize_remark(raw: str) -> tuple[str, bool]:
 #  VLM extraction
 # ══════════════════════════════════════════════════════════════════════════════
 
+def _gemini_error_is_transient(exc: BaseException) -> bool:
+    """
+    True for overload / capacity / network errors where retry or another
+    model may succeed. Matches lookup_tab._gemini_call semantics (503, etc.).
+    """
+    msg = str(exc).lower()
+    return any(
+        k in msg
+        for k in (
+            "429",
+            "500",
+            "502",
+            "503",
+            "504",
+            "quota",
+            "resource_exhausted",
+            "unavailable",
+            "overloaded",
+            "deadline",
+            "timeout",
+            "timed out",
+            "connection",
+            "temporarily",
+            "try again",
+            "internal",
+            "service_unavailable",
+        )
+    )
+
+
 _VLM_PROMPT = """\
 You are a credit officer at Banco San Vicente (BSV), a rural bank in the \
 Philippines. You are reviewing a Bank CI (Credit Investigation) document.
@@ -1980,11 +2012,16 @@ def _call_vlm(pil_img, progress_cb=None) -> str:
                 logger.info("Bank CI VLM response from %s (%d chars).", model, len(text))
                 return text
         except Exception as exc:
-            if any(k in str(exc) for k in ("429", "quota", "resource_exhausted")):
-                logger.warning("VLM model %s quota hit — trying next.", model)
+            if _gemini_error_is_transient(exc):
+                logger.warning(
+                    "Bank CI VLM transient on %s — trying next model: %s",
+                    model,
+                    exc,
+                )
+                time.sleep(min(2.0, 0.5 + 0.5 * _VLM_MODELS.index(model)))
                 continue
             logger.warning("VLM error on model %s: %s", model, exc)
-            break   # non-quota error — don't retry on next model
+            break   # non-transient error — don't retry on next model
 
     return ""   # all models failed / quota exhausted
 

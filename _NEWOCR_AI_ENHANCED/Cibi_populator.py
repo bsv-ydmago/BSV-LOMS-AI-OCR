@@ -202,6 +202,7 @@ import json
 import logging
 import re
 import os
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Callable, Optional
@@ -455,22 +456,41 @@ def _gemini_extract_json(
 
         except Exception as e:
             err_str = str(e).lower()
-            if any(kw in err_str for kw in
-                   ("quota", "rate", "429", "resource_exhausted")):
+            # Quota + transient overload (503/502/…) — try fallback model like lookup_tab
+            is_quota = any(
+                kw in err_str
+                for kw in ("quota", "rate", "429", "resource_exhausted")
+            )
+            is_transient = is_quota or any(
+                kw in err_str
+                for kw in (
+                    "503", "502", "500", "504",
+                    "unavailable", "deadline", "timeout",
+                    "timed out", "overloaded", "internal",
+                )
+            )
+            if is_transient:
                 if model == _MODELS[0]:
-                    primary_quota_hit = True
+                    if is_quota:
+                        primary_quota_hit = True
                     _log.warning(
-                        f"{label} — {_MODELS[0]} quota hit, "
+                        f"{label} — {_MODELS[0]} error ({e!s}), "
                         f"trying {_MODELS[1]}…"
                     )
                 else:
-                    crit_msg = (
-                        f"🚫 [{label}] ALL Gemini models quota exhausted. "
-                        f"This extraction will be empty."
-                    )
-                    _log.error(crit_msg)
-                    _quota_warnings.append(crit_msg)
-                    _notify(-1, crit_msg)
+                    if is_quota:
+                        crit_msg = (
+                            f"🚫 [{label}] ALL Gemini models quota exhausted. "
+                            f"This extraction will be empty."
+                        )
+                        _log.error(crit_msg)
+                        _quota_warnings.append(crit_msg)
+                        _notify(-1, crit_msg)
+                    else:
+                        _log.warning(
+                            f"{label} — {_MODELS[1]} also failed ({e!s})."
+                        )
+                time.sleep(min(2.5, 1.0))
                 continue
             _log.error(f"{label} — Gemini API error ({model}): {e}")
             return {"_error": str(e)}

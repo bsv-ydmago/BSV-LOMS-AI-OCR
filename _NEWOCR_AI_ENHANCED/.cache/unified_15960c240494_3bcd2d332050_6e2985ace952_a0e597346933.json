@@ -1,0 +1,167 @@
+{
+  "cic": {},
+  "payslip": {
+    "employee_name": "GOLIMLIM, KENT Q.",
+    "position": "NURSE II",
+    "date_hired": "June 1, 2018",
+    "salary_grade": "SG 15 Step 3",
+    "status": "Permanent",
+    "basic_salary": 22316,
+    "gross_compensation": 24316,
+    "pera": 2000,
+    "deductions": {
+      "gsis_ps": 630.45,
+      "phic_ps": 279,
+      "pagibig_ps": 100,
+      "withholding_tax": 872.25,
+      "total_deductions": 1881.7
+    },
+    "net_pay": 22434.3,
+    "pay_periods": [
+      {
+        "start_date": "01/01/2025",
+        "end_date": "12/31/2025"
+      }
+    ]
+  },
+  "saln": {
+    "filing_type": "Annual filing",
+    "filing_date": "December 31, 2025",
+    "declarant_name": "GOLIMLIM Kent Q",
+    "position": "Nurse II",
+    "agency_office": "DOH - Camarines Norte Provincial Hospital",
+    "office_address": "Bagasbas, Daet, Camarines Norte",
+    "spouse_name": "GOLIMLIM Ana P",
+    "spouse_position": "Housewife / Self-employed",
+    "spouse_agency_office": "N/A",
+    "filing_mode": "Separate Filing",
+    "children": [
+      {
+        "name": "Golimlim, Bea Q.",
+        "age": 14,
+        "date_of_birth": null
+      },
+      {
+        "name": "Golimlim, Luke Q.",
+        "age": 10,
+        "date_of_birth": null
+      },
+      {
+        "name": "Golimlim, Zoe Q.",
+        "age": 6,
+        "date_of_birth": null
+      }
+    ],
+    "assets": {
+      "real_properties": [
+        {
+          "description": "Residential House & Lot",
+          "kind": "Residential",
+          "location": "Brgy Lag-on, Daet, CN",
+          "assessed_value": 180000,
+          "current_fair_market_value": 780000,
+          "year_acquired": 2018,
+          "acquisition_cost": 600000
+        }
+      ],
+      "personal_properties": [
+        {
+          "description": "Personal Belongings/Clothing",
+          "acquisition_year": "Various Years",
+          "acquisition_cost": 38000,
+          "current_value": 38000
+        },
+        {
+          "description": "Computer/Laptop/Cellphone",
+          "acquisition_year": 2024,
+          "acquisition_cost": 62000,
+          "current_value": 62000
+        },
+        {
+          "description": "Appliances/Furniture",
+          "acquisition_year": "Various Years",
+          "acquisition_cost": 75000,
+          "current_value": 75000
+        },
+        {
+          "description": "Motorcycles",
+          "acquisition_year": 2021,
+          "acquisition_cost": 58000,
+          "current_value": 58000
+        }
+      ],
+      "cash_on_hand": 12000,
+      "cash_in_bank": 38500,
+      "cash_on_hand_and_in_bank": null,
+      "total_assets": 883500
+    },
+    "liabilities": [
+      {
+        "nature": "Housing Loan",
+        "creditor": "PAG-IBIG (HDMF)",
+        "outstanding_balance": 380500
+      },
+      {
+        "nature": "Salary Loan",
+        "creditor": "GSIS",
+        "outstanding_balance": 95000
+      },
+      {
+        "nature": "Salary Loan",
+        "creditor": "LANDBANK",
+        "outstanding_balance": 35000
+      }
+    ],
+    "total_liabilities": 510500,
+    "net_worth": 373000,
+    "business_interests": "I/ We do not have any business interest or financial connection.",
+    "relatives_in_government_service": [
+      {
+        "name": "Rolando Q. Golimlim",
+        "relationship": "Brother",
+        "position": "Administrative Officer I",
+        "agency_office": "DOH - Camarines Norte"
+      }
+    ],
+    "date_signed": "February 5, 2026",
+    "declarant_id_type": "PhilHealth ID",
+    "declarant_id_no": "PH-9876543210",
+    "declarant_id_date_issued": "15-Jun-20"
+  },
+  "itr": {
+    "year": 2025,
+    "period_from": "01/01",
+    "period_to": "12/31",
+    "tin": "9876543210000",
+    "employee_name": "GOLIMLIM, KENT Q.",
+    "rdo_code": "055",
+    "registered_address": "Brgy Lag-on, Daet, Camarines Norte",
+    "date_of_birth": "03/22/1990",
+    "employer_tin": "0014567890000",
+    "employer_name": "CAMARINES NORTE PROVINCIAL HOSPITAL - DOH",
+    "employer_registered_address": "Bagasbas, Daet, Camarines Norte",
+    "employer_zip": "4600",
+    "employer_type": "Main Employer",
+    "gross_compensation_income": 498000,
+    "total_non_taxable_exempt_compensation": 275440,
+    "taxable_compensation_income_present_employer": 222560,
+    "taxable_compensation_previous_employer": 0,
+    "gross_taxable_compensation_income": 222560,
+    "tax_due": 8512,
+    "tax_withheld_present_employer": 8512,
+    "tax_withheld_previous_employer": 0,
+    "total_taxes_withheld_as_adjusted": 8512,
+    "non_taxable_exempt_compensation_details": {
+      "basic_salary_mwe": null,
+      "thirteenth_month_pay_other_benefits": 90000,
+      "de_minimis_benefits": 16440,
+      "sss_gsis_phic_pagibig_union_dues": 9000,
+      "salaries_and_other_forms_of_compensation": 160000
+    },
+    "taxable_compensation_income_details": {
+      "regular_basic_salary": 248000,
+      "supplementary_taxable_thirteenth_month_benefits": 0
+    },
+    "net_pay": null
+  }
+}

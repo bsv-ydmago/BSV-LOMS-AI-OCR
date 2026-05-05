@@ -1437,6 +1437,74 @@ def _sim_open_expense_table_window(self):
         ],
     ).pack(side="left", padx=(6, 0), pady=9)
 
+    # ── Global inflation rate input (right side of search bar) ──────────
+    tk.Frame(search_bar, bg=_BORDER_MID, width=1).pack(side="left", fill="y", padx=(16, 0), pady=8)
+    tk.Label(
+        search_bar,
+        text="Global Rate (%):",
+        font=F(9, "bold"),
+        fg=_TXT_SOFT,
+        bg=_OFF_WHITE,
+    ).pack(side="left", padx=(14, 6), pady=9)
+    _global_rate_var = tk.StringVar(value="0.0")
+    _global_rate_entry = ctk.CTkEntry(
+        search_bar,
+        textvariable=_global_rate_var,
+        width=90,
+        height=28,
+        corner_radius=5,
+        fg_color=_WHITE,
+        text_color=_TXT_NAVY,
+        border_color=_BORDER_MID,
+        font=FF(10),
+        placeholder_text="e.g. 10.0",
+    )
+    _global_rate_entry.pack(side="left", pady=9)
+
+    def _apply_global_rate_from_popup():
+        try:
+            pct = float(_global_rate_var.get())
+        except (ValueError, TypeError):
+            pct = 0.0
+        if pct < 0.0:
+            pct = 0.0
+        _global_rate_var.set(str(pct))
+        for var in self._sim_sliders.values():
+            var.set(str(pct))
+        _sim_render_expense_table_rows(self)
+
+    ctk.CTkButton(
+        search_bar,
+        text="Apply All",
+        width=82,
+        height=28,
+        corner_radius=5,
+        fg_color=_NAVY_LIGHT,
+        hover_color=_NAVY_MID,
+        text_color=_WHITE,
+        font=FF(9, "bold"),
+        command=_apply_global_rate_from_popup,
+    ).pack(side="left", padx=(6, 0), pady=9)
+    ctk.CTkButton(
+        search_bar,
+        text="Reset",
+        width=60,
+        height=28,
+        corner_radius=5,
+        fg_color=_OFF_WHITE,
+        hover_color=_BORDER_MID,
+        text_color=_TXT_MUTED,
+        font=FF(9, "bold"),
+        border_width=1,
+        border_color=_BORDER_MID,
+        command=lambda: [
+            _global_rate_var.set("0.0"),
+            [var.set("0") for var in self._sim_sliders.values()],
+            _sim_render_expense_table_rows(self),
+        ],
+    ).pack(side="left", padx=(4, 0), pady=9)
+    _global_rate_entry.bind("<Return>", lambda _e: _apply_global_rate_from_popup())
+
     body = tk.Frame(win, bg=_CARD_WHITE)
     body.pack(fill="both", expand=True, padx=12, pady=12)
     sim_sb = tk.Scrollbar(body, relief="flat",
