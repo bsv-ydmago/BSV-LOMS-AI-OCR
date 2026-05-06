@@ -613,7 +613,7 @@ def _open_review_popup(self, row: dict):
 
     popup = tk.Toplevel(self)
     popup.title("Review Edit Request")
-    popup.configure(bg="#0B1622")
+    popup.configure(bg="#F4F6F8")
     popup.resizable(False, False)
     popup.grab_set()
 
@@ -624,15 +624,15 @@ def _open_review_popup(self, row: dict):
     popup.geometry(f"{PW}x{PH}+{rx}+{ry}")
 
     # ── Scrollable main area ──────────────────────────────────────────
-    root_frame = tk.Frame(popup, bg="#0B1622",
-                      highlightbackground="#5BBF3E",
-                      highlightthickness=2)
+    root_frame = tk.Frame(popup, bg="#F4F6F8",
+                  highlightbackground="#5BBF3E",
+                  highlightthickness=2)
     root_frame.pack(fill="both", expand=True)
 
-    main_canvas = tk.Canvas(root_frame, bg="#0B1622", highlightthickness=0)
+    main_canvas = tk.Canvas(root_frame, bg="#F4F6F8", highlightthickness=0)
     main_canvas.pack(fill="both", expand=True)
 
-    scroll_frame = tk.Frame(main_canvas, bg="#0B1622")
+    scroll_frame = tk.Frame(main_canvas, bg="#F4F6F8")
     _sc_win = main_canvas.create_window((0, 0), window=scroll_frame, anchor="nw")
 
     def _on_frame_configure(e):
@@ -644,33 +644,33 @@ def _open_review_popup(self, row: dict):
     main_canvas.bind("<Configure>", _on_canvas_configure)
 
     # ── Header strip ──────────────────────────────────────────────────
-    hdr = tk.Frame(scroll_frame, bg="#0B1622")
+    hdr = tk.Frame(scroll_frame, bg="#F4F6F8")
     hdr.pack(fill="x", padx=16, pady=(18, 4))
 
-    sb_hdr = tk.Frame(hdr, bg="#0B1622")
+    sb_hdr = tk.Frame(hdr, bg="#F4F6F8")
     sb_hdr.pack(fill="x")
     tk.Label(sb_hdr, text="⚙", font=("Segoe UI Emoji", 16),
-            fg="#5BBF3E", bg="#0B1622").pack(side="left", padx=(0, 8))
+            fg="#5BBF3E", bg="#F4F6F8").pack(side="left", padx=(0, 8))
 
-    sb_tc = tk.Frame(sb_hdr, bg="#0B1622")
+    sb_tc = tk.Frame(sb_hdr, bg="#F4F6F8")
     sb_tc.pack(side="left")
     tk.Label(sb_tc, text="REVIEW",
-            font=("Segoe UI", 8, "bold"), fg="#4A6480",
-            bg="#0B1622", anchor="w").pack(anchor="w")
+            font=("Segoe UI", 8, "bold"), fg="#7A94B0",
+            bg="#F4F6F8", anchor="w").pack(anchor="w")
     tk.Label(sb_tc, text=f"Edit Request  #{ row.get('id','—') }",
-            font=("Segoe UI", 11, "bold"), fg="#EEF3FA",
-            bg="#0B1622", anchor="w").pack(anchor="w")
+            font=("Segoe UI", 11, "bold"), fg="#0B1F3A",
+            bg="#F4F6F8", anchor="w").pack(anchor="w")
 
     tk.Label(hdr,
-            text=f"Submitted {row.get('requested_at','—')}",
-            font=("Segoe UI", 8), fg="#4A6480", bg="#0B1622",
-            justify="left", anchor="w").pack(anchor="w", pady=(4, 0))
+        text=f"Submitted {row.get('requested_at','—')}",
+        font=("Segoe UI", 8), fg="#7A94B0", bg="#F4F6F8",
+        justify="left", anchor="w").pack(anchor="w", pady=(4, 0))
 
-    tk.Frame(scroll_frame, bg="#1A2F47", height=1).pack(fill="x", padx=12, pady=(0, 6))
+    tk.Frame(scroll_frame, bg="#C8D8EC", height=1).pack(fill="x", padx=12, pady=(0, 6))
 
     # Status badge in header
     bbg, bfg = _status_color(row.get("status", ""))
-    status_pill = tk.Frame(scroll_frame, bg="#0B1622")
+    status_pill = tk.Frame(scroll_frame, bg="#F4F6F8")
     status_pill.pack(anchor="w", padx=20, pady=(0, 8))
     tk.Label(status_pill, text=row.get("status","—").capitalize(),
             font=("Segoe UI", 8, "bold"), fg=bfg, bg=bbg,
@@ -678,17 +678,17 @@ def _open_review_popup(self, row: dict):
 
     # ── Section: Request Info ─────────────────────────────────────────
     def _section_label(parent, text):
-        sec = tk.Frame(parent, bg="#0B1622")
+        sec = tk.Frame(parent, bg="#F4F6F8")
         sec.pack(fill="x", padx=20, pady=(16, 6))
         tk.Label(sec, text=text, font=("Segoe UI", 7, "bold"),
-                fg="#2D4F7A", bg="#0B1622").pack(side="left")
-        tk.Frame(sec, bg="#1A2F47", height=1).pack(
+                fg="#2E5C8A", bg="#F4F6F8").pack(side="left")
+        tk.Frame(sec, bg="#C8D8EC", height=1).pack(
             side="left", fill="x", expand=True, padx=(10, 0), pady=1)
 
     _section_label(scroll_frame, "REQUEST DETAILS")
 
-    info_card = tk.Frame(scroll_frame, bg="#162438",
-                     highlightbackground="#5BBF3E", highlightthickness=1)
+    info_card = tk.Frame(scroll_frame, bg=WHITE,
+                 highlightbackground="#5BBF3E", highlightthickness=1)
     info_card.pack(fill="x", padx=20)
 
     _info = [
@@ -700,31 +700,34 @@ def _open_review_popup(self, row: dict):
     ]
 
     for idx, (label, value) in enumerate(_info):
-        row_bg = "#162438" if idx % 2 == 0 else "#1A2F47"
+        row_bg = WHITE if idx % 2 == 0 else "#F0F6FF"
         rf = tk.Frame(info_card, bg=row_bg)
         rf.pack(fill="x")
         if idx > 0:
-            tk.Frame(info_card, bg="#1A3050", height=1).pack(fill="x")
+            tk.Frame(info_card, bg="#E2EAF4", height=1).pack(fill="x")
+
+        # Green left accent bar like Image 2
+        tk.Frame(rf, bg="#5BBF3E", width=3).pack(side="left", fill="y")
 
         tk.Label(rf, text=label, font=_F(self, 8, "bold"),
-                 fg="#5A8AB0", bg=row_bg,
-                 width=16, anchor="w", padx=14, pady=8).pack(side="left")
+                fg="#2E5C8A", bg=row_bg,
+                width=16, anchor="w", padx=14, pady=8).pack(side="left")
         tk.Label(rf, text=str(value), font=_F(self, 9),
-                 fg=WHITE, bg=row_bg, anchor="w",
-                 wraplength=340, justify="left").pack(
-                     side="left", fill="x", expand=True, padx=(0, 14))
+                fg="#0B1F3A", bg=row_bg, anchor="w",
+                wraplength=340, justify="left").pack(
+                    side="left", fill="x", expand=True, padx=(0, 14))
 
     # ── Section: Value Comparison ─────────────────────────────────────
     _section_label(scroll_frame, "VALUE COMPARISON")
 
-    cmp_row = tk.Frame(scroll_frame, bg=NAVY_DEEP)
+    cmp_row = tk.Frame(scroll_frame, bg="#F4F6F8")
     cmp_row.pack(fill="x", padx=20, pady=(0, 4))
 
     for side_label, val_key, accent, card_bg, txt_col in [
         ("OLD VALUE", "old_value", "#C0392B", "#1A0A0A", "#FF9999"),
         ("NEW VALUE", "new_value", "#27AE60", "#0A1A0D", "#88EEA8"),
     ]:
-        col = tk.Frame(cmp_row, bg=NAVY_DEEP)
+        col = tk.Frame(cmp_row, bg="#F4F6F8")
         col.pack(side="left", fill="both", expand=True, padx=(0, 8))
 
         top_bar = tk.Frame(col, bg=accent, height=3)
@@ -751,7 +754,7 @@ def _open_review_popup(self, row: dict):
                  padx=12, pady=12, anchor="w").pack(fill="x")
 
     # ── Rejection reason (always created, shown/hidden via pack) ──────
-    reason_frame = tk.Frame(scroll_frame, bg=NAVY_DEEP)
+    reason_frame = tk.Frame(scroll_frame, bg="#F4F6F8")
     reason_var   = tk.StringVar()
     reason_widgets_built = [False]
 
@@ -783,8 +786,8 @@ def _open_review_popup(self, row: dict):
         entry.focus_set()
 
         tk.Label(reason_frame,
-                 text="Optional — leave blank to reject without a reason",
-                 font=_F(self, 7), fg=TXT_MUTED, bg=NAVY_DEEP).pack(
+            text="Optional — leave blank to reject without a reason",
+            font=_F(self, 7), fg=TXT_SOFT, bg="#F4F6F8").pack(
                      anchor="w", pady=(4, 0))
 
         # Force scroll area to update
@@ -793,11 +796,11 @@ def _open_review_popup(self, row: dict):
         main_canvas.yview_moveto(1.0)
 
     # ── Buttons (fixed at bottom, outside scroll) ─────────────────────
-    tk.Frame(root_frame, bg="#1A2F47", height=1).pack(fill="x", side="bottom")
-    btn_outer = tk.Frame(root_frame, bg="#0B1622")
+    tk.Frame(root_frame, bg="#C8D8EC", height=1).pack(fill="x", side="bottom")
+    btn_outer = tk.Frame(root_frame, bg="#F4F6F8")
     btn_outer.pack(fill="x", side="bottom")
 
-    btn_row = tk.Frame(btn_outer, bg="#0B1622")
+    btn_row = tk.Frame(btn_outer, bg="#F4F6F8")
     btn_row.pack(fill="x", padx=20, pady=12)
 
     # Keep references so we can swap them
@@ -834,9 +837,9 @@ def _open_review_popup(self, row: dict):
             btn_row, text="← Back",
             command=lambda: _cancel_reject(),
             height=36, corner_radius=7,
-            fg_color="#C8D8E8", hover_color="#B0C4D8",
-            text_color="#1A2F47", font=_F(self, 9),
-            border_width=1, border_color=BORDER_MID
+            fg_color="#DDE6F0", hover_color="#C8D8EC",
+            text_color="#1A2E42", font=_F(self, 9),
+            border_width=1, border_color="#B0C4D8"
         )
         back_btn.pack(side="left")
 
@@ -875,13 +878,13 @@ def _open_review_popup(self, row: dict):
         reject_btn_ref[0] = rb
 
         ctk.CTkButton(
-            btn_row, text="Cancel",
-            command=popup.destroy,
-            height=36, corner_radius=7,
-            fg_color="#C8D8E8", hover_color="#B0C4D8",
-            text_color="#1A2F47", font=_F(self, 9),
-            border_width=1, border_color=BORDER_MID
-        ).pack(side="right")
+        btn_row, text="Cancel",
+        command=popup.destroy,
+        height=36, corner_radius=7,
+        fg_color="#DDE6F0", hover_color="#C8D8EC",
+        text_color="#1A2E42", font=_F(self, 9),
+        border_width=1, border_color="#B0C4D8"
+    ).pack(side="right")
 
     _rebuild_buttons()
 
