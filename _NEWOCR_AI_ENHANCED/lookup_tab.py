@@ -891,18 +891,36 @@ def _process_single_file(self, path: str, cancelled) -> None:
 
     # ── Persist to SQLite ─────────────────────────────────────────────
     step("Saving to Summary…")
+    save_action = None
     try:
         session_id = getattr(self, "_lookup_session_id",
                              datetime.now().isoformat(timespec="seconds"))
-        db_save_applicant(session_id, results)
-        _log(self, f"[{fname}] Saved to DB → session {session_id}")
+        requested_by = getattr(self, "_current_username", "") or "unknown"
+        action = db_save_applicant(session_id, results,
+                                    requested_by=requested_by)
+        save_action = action
+        if action == "queued_for_approval":
+            _log(self, f"[{fname}] Name match → queued overwrite for approval")
+        elif action and action.startswith("noop"):
+            _log(self, f"[{fname}] Name match → no changes to apply")
+        else:
+            _log(self, f"[{fname}] Saved to DB → session {session_id}")
         _ui(self, lambda: lookup_summary_notify(self))
     except Exception as exc:
         _log(self, f"[{fname}] DB save failed (non-fatal): {exc}")
 
     # ── Mark done ────────────────────────────────────────────────────
+    # Note: if save_action == queued_for_approval, admin will overwrite after approval.
     _ui(self, lambda:
-        _set_row_status(self, path, "done", "Done  ·  Saved to Summary"))
+        _set_row_status(
+            self,
+            path,
+            "done",
+            "Done  ·  Submitted for Approval"
+            if save_action == "queued_for_approval"
+            else ("Done  ·  No changes" if (save_action or "").startswith("noop")
+                  else "Done  ·  Saved to Summary")
+        ))
     _ui(self, lambda:
         self._lookup_file_data[path]["widgets"]["expand_btn"].configure(
             state="normal"))

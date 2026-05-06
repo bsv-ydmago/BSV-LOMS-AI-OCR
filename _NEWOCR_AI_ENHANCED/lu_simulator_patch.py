@@ -77,7 +77,7 @@ SIM_CLIENT_PAGE_SIZE = 10
 _SIM_DEFAULT_RISK_RANGES = {
     "LOW":    (1.0,  35.0),
     "MEDIUM": (36.0, 70.0),
-    "HIGH":   (71.0, float("inf")),
+    "HIGH":   (70.01, float("inf")),
 }
 
 def _apply_sim_client_tree_style():
@@ -450,6 +450,7 @@ def _build_simulator_panel(self, parent):
 
     # Risk tags
     self._sim_client_tree.tag_configure("HIGH",   background="#FFF5F5", foreground=_ACCENT_RED)
+    self._sim_client_tree.tag_configure("HIGH_NEG", background="#FFE5E5", foreground=_ACCENT_RED)
     self._sim_client_tree.tag_configure("MEDIUM", background="#FFFBF0", foreground=_ACCENT_GOLD)
     self._sim_client_tree.tag_configure("LOW",    background="#F0FBE8", foreground=_ACCENT_SUCCESS)
     self._sim_client_tree.tag_configure("NA",     background=_WHITE,    foreground=_TXT_MUTED)
@@ -1648,6 +1649,14 @@ def _sim_populate(self):
     else:
         self._sim_hdr_lbl.config(text="⚙️  Inflation / Cost-Shock Simulator", fg=_WHITE)
 
+    # Exclude synthetic summary rows ("TOTAL" / "AVERAGE") that some source
+    # files store as client records — they are not real clients.
+    _EXCLUDED_CLIENT_NAMES = {"total", "average"}
+    recs = [
+        r for r in recs
+        if str((r or {}).get("client") or "").strip().lower() not in _EXCLUDED_CLIENT_NAMES
+    ]
+
     # Use per-client net income (not total source) for simulator totals.
     net_income           = sum((r.get("net_income") or 0) for r in recs)
     self._sim_net_income = net_income
@@ -1883,6 +1892,10 @@ def _sim_refresh(self):
     _sim_refresh_client_table(self)
 
 
+_NEGATIVE_INCOME_LABEL = "HIGH (NEGATIVE INCOME)"
+_NEGATIVE_INCOME_PCT_DISPLAY = "N/A (Negative Income)"
+
+
 def _sim_pct_net_to_amort_label(pct: float, ranges: dict | None = None) -> str:
     """
     Risk Label rules for the simulator client table.
@@ -1891,6 +1904,10 @@ def _sim_pct_net_to_amort_label(pct: float, ranges: dict | None = None) -> str:
 
     Each range entry: {"LOW": (min, max), "MEDIUM": (min, max), "HIGH": (min, max)}
     Boundaries are inclusive on both ends. HIGH max may be float('inf').
+
+    Special sentinels:
+      pct == -2.0  → zero amortization; returns "N/A" (not meaningful to assess risk).
+      pct <  0     → negative net income; returns _NEGATIVE_INCOME_LABEL.
     Falls back to LOW if pct matches no range.
     """
     if ranges is None:
@@ -1899,7 +1916,10 @@ def _sim_pct_net_to_amort_label(pct: float, ranges: dict | None = None) -> str:
         p = float(pct)
     except Exception:
         return "LOW"
-    # Check HIGH first, then MEDIUM, then LOW so the most severe wins on overlap edge.
+    if p == -2.0:
+        return "N/A"
+    if p < 0:
+        return _NEGATIVE_INCOME_LABEL
     for label in ("HIGH", "MEDIUM", "LOW"):
         lo, hi = ranges.get(label, (0.0, -1.0))
         if lo <= p <= hi:
@@ -1910,15 +1930,23 @@ def _sim_pct_net_to_amort_label(pct: float, ranges: dict | None = None) -> str:
 def _sim_build_risk_reasoning(risk_label: str, pct_net_to_am: float) -> str:
     """Build user-facing simulator risk explanation text."""
     label = str(risk_label or "LOW").upper()
+    if label == "N/A":
+        return (
+            "The client has no recorded amortization (₱0.00). "
+            "Risk cannot be meaningfully assessed — marked N/A."
+        )
+    if "NEGATIVE" in label:
+        return (
+            "The client has NEGATIVE simulated net income. "
+            "Amortization % cannot be meaningfully computed. "
+            "Immediate review required."
+        )
     base = (
         f"The client is {label} risk because they have "
         f"{float(pct_net_to_am):.1f}% of Net Income to Amortization."
     )
     if label == "HIGH":
-        return (
-            base
-            + " Please review carefully — this client might have a special loan case."
-        )
+        return base + " Please review carefully — this client might have a special loan case."
     return base
 
 
@@ -1989,7 +2017,10 @@ def _sim_refresh_client_table(self):
         try:
             if v is None:
                 return "—"
-            return f"{float(v):.1f}%"
+            fv = float(v)
+            if fv < 0:
+                return _NEGATIVE_INCOME_PCT_DISPLAY
+            return f"{fv:.1f}%"
         except Exception:
             return "—"
 
@@ -2030,10 +2061,12 @@ def _sim_refresh_client_table(self):
         sim_net_income = base_net - extra_total
 
         # % Net → Amort uses simulated net income (Total Current Amort / Total Net Income Simulated)
-        if sim_net_income <= 0:
-            pct_net_to_am = 999.0 if current_am > 0 else 0.0
+        if current_am == 0:
+            pct_net_to_am = -2.0  # sentinel: no amortization — risk is N/A
+        elif sim_net_income <= 0:
+            pct_net_to_am = -1.0  # sentinel: negative income
         else:
-            pct_net_to_am = (current_am / sim_net_income) * 100.0 if current_am > 0 else 0.0
+            pct_net_to_am = (current_am / sim_net_income) * 100.0
 
         sim_risk = _sim_pct_net_to_amort_label(pct_net_to_am, getattr(self, "_sim_risk_ranges", None))
         risk_reasoning = _sim_build_risk_reasoning(sim_risk, pct_net_to_am)
@@ -2087,7 +2120,15 @@ def _sim_refresh_client_table(self):
             r["sim_risk_label"],
             r["risk_reasoning"],
         )
-        tag = r["sim_risk_label"] if r["sim_risk_label"] in ("HIGH", "MEDIUM", "LOW") else "NA"
+        _lbl = r["sim_risk_label"]
+        if _lbl == "HIGH":
+            tag = "HIGH"
+        elif "NEGATIVE" in str(_lbl).upper():
+            tag = "HIGH_NEG"
+        elif _lbl in ("MEDIUM", "LOW"):
+            tag = _lbl
+        else:
+            tag = "NA"
         self._sim_iid_to_client[iid] = str(full_client_name)
         tree.insert("", "end", iid=iid, values=vals, tags=(tag,))
 
@@ -2297,7 +2338,10 @@ def _sim_show_client_details(self, client_name: str):
 
     def _pct(v):
         try:
-            return f"{float(v):.1f}%"
+            fv = float(v)
+            if fv < 0:
+                return _NEGATIVE_INCOME_PCT_DISPLAY
+            return f"{fv:.1f}%"
         except Exception:
             return "—"
 
@@ -2502,7 +2546,7 @@ def _sim_write_export_settings_sheet(ws, *, self_app, fname, generated_at, expor
     _risk_ranges = getattr(self_app, "_sim_risk_ranges", None) or {}
     _low_r  = _risk_ranges.get("LOW",    (1.0,  35.0))
     _med_r  = _risk_ranges.get("MEDIUM", (36.0, 70.0))
-    _high_r = _risk_ranges.get("HIGH",   (71.0, float("inf")))
+    _high_r = _risk_ranges.get("HIGH",   (70.01, float("inf")))
     def _fmt_range(lo, hi):
         return f"{lo:.0f}% – {hi:.0f}%" if hi != float("inf") else f"≥ {lo:.0f}%"
     risk_rules_text = (
@@ -2520,6 +2564,29 @@ def _sim_write_export_settings_sheet(ws, *, self_app, fname, generated_at, expor
     vc.alignment = Alignment(horizontal="left", vertical="top", indent=1, wrap_text=True)
     vc.fill      = PatternFill("solid", fgColor=_ROW_ODD); vc.border = _grid
     ws.row_dimensions[r_risk].height = 48
+
+    _spacer()
+
+    # ── IMPORTANT NOTICE — Amortization assumption disclaimer ─────────
+    r_notice = _next()
+    ws.merge_cells(start_row=r_notice, start_column=COL_A, end_row=r_notice, end_column=COL_B)
+    _nc2 = ws.cell(r_notice, COL_A,
+        "⚠  IMPORTANT NOTICE: Not all Net Income and Amortization figures shown in this report "
+        "are guaranteed to be accurate. The simulator ASSUMES that ALL clients have an "
+        "amortization obligation. This may not reflect reality — some clients may have NO active "
+        "amortization. Please DOUBLE-CHECK each client record to verify whether the client "
+        "actually has amortization before acting on any risk label or percentage shown here."
+    )
+    _nc2.fill      = PatternFill("solid", fgColor="FFF3CD")
+    _nc2.font      = Font(bold=True, size=9, color="856404", name="Calibri")
+    _nc2.alignment = Alignment(horizontal="left", vertical="top", indent=2, wrap_text=True)
+    _nc2.border    = Border(
+        left=Side(border_style="medium", color="856404"),
+        right=Side(border_style="medium", color="856404"),
+        top=Side(border_style="medium", color="856404"),
+        bottom=Side(border_style="medium", color="856404"),
+    )
+    ws.row_dimensions[r_notice].height = 60
 
     _spacer()
 
@@ -2729,7 +2796,7 @@ def _sim_write_settings_sheet(ws_settings, *, self_app, row_offset: int = 0):
     _risk_ranges = getattr(self_app, "_sim_risk_ranges", None) or {}
     _low_r  = _risk_ranges.get("LOW",    (1.0,  35.0))
     _med_r  = _risk_ranges.get("MEDIUM", (36.0, 70.0))
-    _high_r = _risk_ranges.get("HIGH",   (71.0, float("inf")))
+    _high_r = _risk_ranges.get("HIGH",   (70.01, float("inf")))
 
     def _fmt_range(lo, hi):
         return f"{lo:.0f}% – {hi:.0f}%" if hi != float("inf") else f">= {lo:.0f}%"
@@ -2759,6 +2826,29 @@ def _sim_write_settings_sheet(ws_settings, *, self_app, row_offset: int = 0):
           "The final ratio. If Simulated Net Income ≤ 0, the ratio is set to 999% to flag "
           "the client as extreme risk (amortization exceeds income).",
           bg=_ROW_EVEN, a_bold=True, b_bold=True, height=30, wrap_c=True)
+
+    _spacer()
+
+    # ── IMPORTANT NOTICE — Amortization assumption disclaimer ────────
+    _notice_row = _next()
+    ws_settings.merge_cells(start_row=_notice_row, start_column=COL_A, end_row=_notice_row, end_column=COL_C)
+    _nc = ws_settings.cell(_notice_row, COL_A,
+        "⚠  IMPORTANT NOTICE: Not all Net Income and Amortization figures shown in this report are "
+        "guaranteed to be accurate. The simulator ASSUMES that ALL clients have an amortization "
+        "obligation. This may not reflect reality — some clients may have NO active amortization. "
+        "Please double-check each client record to verify whether the client actually has "
+        "amortization before acting on any risk label or percentage shown here."
+    )
+    _nc.fill      = PatternFill("solid", fgColor="FFF3CD")
+    _nc.font      = Font(bold=True, size=9, color="856404", name="Calibri")
+    _nc.alignment = Alignment(horizontal="left", vertical="top", indent=2, wrap_text=True)
+    _nc.border    = Border(
+        left=Side(border_style="medium", color="856404"),
+        right=Side(border_style="medium", color="856404"),
+        top=Side(border_style="medium", color="856404"),
+        bottom=Side(border_style="medium", color="856404"),
+    )
+    ws_settings.row_dimensions[_notice_row].height = 60
 
     _spacer()
 
@@ -3042,11 +3132,13 @@ def _sim_export_client_impact_excel(self):
 
         # Simulated net income = Base net income minus simulated cost increase.
         sim_net_income = base_net - extra_total
-        if sim_net_income <= 0:
-            pct_net_to_am = 999.0 if current_am > 0 else 0.0
+        if current_am == 0:
+            pct_net_to_am = -2.0  # sentinel: no amortization — risk is N/A
+        elif sim_net_income <= 0:
+            pct_net_to_am = -1.0  # sentinel: negative income
         else:
             pct_net_to_am = (
-                (current_am / sim_net_income) * 100.0 if current_am > 0 else 0.0
+                (current_am / sim_net_income) * 100.0
             )
 
         sim_risk = _sim_pct_net_to_amort_label(pct_net_to_am, getattr(self, "_sim_risk_ranges", None))
@@ -3206,9 +3298,10 @@ def _sim_export_client_impact_excel(self):
 
     # Data rows (start row 4)
     _risk_colors = {
-        "HIGH":   (_C_HIGH_BG, _C_HIGH_FG),
-        "MEDIUM": (_C_MED_BG,  _C_MED_FG),
-        "LOW":    (_C_LOW_BG,  _C_LOW_FG),
+        "HIGH":                  (_C_HIGH_BG, _C_HIGH_FG),
+        "HIGH (NEGATIVE INCOME)": (_C_HIGH_BG, _C_HIGH_FG),
+        "MEDIUM":                (_C_MED_BG,  _C_MED_FG),
+        "LOW":                   (_C_LOW_BG,  _C_LOW_FG),
     }
 
     for idx, r in enumerate(rows):
@@ -3395,7 +3488,10 @@ def _sim_merge_excel_files(self):
 
     def _pct_str(v) -> str:
         try:
-            return f"{float(v):.1f}%"
+            fv = float(v)
+            if fv < 0:
+                return _NEGATIVE_INCOME_PCT_DISPLAY
+            return f"{fv:.1f}%"
         except Exception:
             return "—"
 
@@ -3433,10 +3529,12 @@ def _sim_merge_excel_files(self):
             else (0.0 if extra_total <= 0 else 100.0)
         )
         sim_net_income = base_net - extra_total
-        if sim_net_income <= 0:
-            pct_net_to_am = 999.0 if current_am > 0 else 0.0
+        if current_am == 0:
+            pct_net_to_am = -2.0  # sentinel: no amortization — risk is N/A
+        elif sim_net_income <= 0:
+            pct_net_to_am = -1.0  # sentinel: negative income
         else:
-            pct_net_to_am = (current_am / sim_net_income) * 100.0 if current_am > 0 else 0.0
+            pct_net_to_am = (current_am / sim_net_income) * 100.0
 
         sim_risk = _sim_pct_net_to_amort_label(pct_net_to_am, getattr(self, "_sim_risk_ranges", None))
         risk_reasoning = _sim_build_risk_reasoning(sim_risk, pct_net_to_am)
@@ -3464,6 +3562,9 @@ def _sim_merge_excel_files(self):
             "% Net → Amort":            _pct_str(pct_net_to_am),
             "Risk Label":               sim_risk,
             "Risk Reasoning":           risk_reasoning,
+            # Raw floats — used by NIA pre-computation to avoid re-parsing formatted strings
+            "_raw_sim_net_income":      sim_net_income,
+            "_raw_current_amort":       current_am,
         })
 
     # Index Client Impact rows by normalised name for O(1) lookup.
@@ -3635,9 +3736,16 @@ def _sim_merge_excel_files(self):
         unmatched += 1
 
     # Sort by highest % Net → Amort first (descending).
-    merged_rows.sort(key=lambda r: -(
-        float(str(r.get("% Net → Amort") or "0").replace("%", "").strip() or 0)
-    ))
+    # Guard against "N/A (Negative Income)" or any non-numeric string — treat as infinity so
+    # negative-income clients always sort to the top.
+    def _sort_pct(r):
+        raw = str(r.get("% Net → Amort") or "0").replace("%", "").strip()
+        try:
+            return -float(raw or 0)
+        except (ValueError, TypeError):
+            return -float("inf")   # negative income → sort first
+
+    merged_rows.sort(key=_sort_pct)
 
     # ── Save ─────────────────────────────────────────────────────────
     out_path = filedialog.asksaveasfilename(
@@ -3750,9 +3858,10 @@ def _sim_merge_excel_files(self):
     PCT_FMT = '0.0"%"'
 
     _risk_colors = {
-        "HIGH":   (_C_HIGH_BG, _C_HIGH_FG, True),
-        "MEDIUM": (_C_MED_BG,  _C_MED_FG,  True),
-        "LOW":    (_C_LOW_BG,  _C_LOW_FG,  True),
+        "HIGH":                  (_C_HIGH_BG, _C_HIGH_FG, True),
+        "HIGH (NEGATIVE INCOME)": (_C_HIGH_BG, _C_HIGH_FG, True),
+        "MEDIUM":                (_C_MED_BG,  _C_MED_FG,  True),
+        "LOW":                   (_C_LOW_BG,  _C_LOW_FG,  True),
     }
 
     # Data rows (start row 4)
@@ -3810,71 +3919,713 @@ def _sim_merge_excel_files(self):
 
         ws.row_dimensions[row_num].height = 18
 
-    # ── TOTAL and AVERAGE summary rows ───────────────────────────────
-    _data_start_row = 4
-    _data_end_row   = 3 + len(merged_rows)
-    _total_row_num  = _data_end_row + 1
-    _avg_row_num    = _data_end_row + 2
-
-    _SUM_BG  = "1A3A5C"   # deep navy — matches header
-    _AVG_BG  = "1E4D7B"   # slightly lighter navy
-    _SUM_FG  = "FFFFFF"
-    _NUM_FG  = "A8D8EA"   # light teal for numbers in dark rows
-
-    _lbl_font_sum = Font(bold=True, size=9, color=_SUM_FG,  name="Calibri")
-    _lbl_font_avg = Font(bold=True, size=9, color=_SUM_FG,  name="Calibri")
-    _num_font_sum = Font(bold=True, size=9, color=_NUM_FG,  name="Calibri")
-    _num_font_avg = Font(bold=True, size=9, color=_NUM_FG,  name="Calibri")
-    _al_l2 = Alignment(horizontal="left",   vertical="center")
-    _al_r2 = Alignment(horizontal="right",  vertical="center")
-    _al_c2 = Alignment(horizontal="center", vertical="center")
-
-    _thin_s  = Side(border_style="thin",   color="4A7BAD")
-    _thick_t = Side(border_style="medium", color="A8D8EA")
-    _sum_border = Border(left=_thin_s, right=_thin_s,
-                         top=_thick_t, bottom=_thin_s)
-    _avg_border = Border(left=_thin_s, right=_thin_s,
-                         top=_thin_s,  bottom=_thick_t)
-
-    def _write_summary_row(row_n, label, bg, lbl_font, num_font, border):
-        rf = PatternFill("solid", fgColor=bg)
-        for ci2, h2 in enumerate(all_output_headers, 1):
-            c2 = ws.cell(row_n, ci2)
-            c2.fill   = rf
-            c2.border = border
-            if ci2 == 1:
-                c2.value     = label
-                c2.font      = lbl_font
-                c2.alignment = _al_l2
-            elif h2 in _NUM_COLS:
-                col_letter = get_column_letter(ci2)
-                if label == "TOTAL":
-                    c2.value = f"=SUM({col_letter}{_data_start_row}:{col_letter}{_data_end_row})"
-                else:
-                    c2.value = f"=AVERAGE({col_letter}{_data_start_row}:{col_letter}{_data_end_row})"
-                c2.number_format = NUM_FMT
-                c2.font      = num_font
-                c2.alignment = _al_r2
-            elif h2 in _PCT_COLS:
-                col_letter = get_column_letter(ci2)
-                if label == "TOTAL":
-                    c2.value = ""   # totalling % doesn't make sense
-                else:
-                    c2.value = f"=AVERAGE({col_letter}{_data_start_row}:{col_letter}{_data_end_row})"
-                c2.number_format = PCT_FMT
-                c2.font      = num_font
-                c2.alignment = _al_c2
-            else:
-                c2.value     = ""
-                c2.font      = lbl_font
-                c2.alignment = _al_l2
-        ws.row_dimensions[row_n].height = 18
-
-    _write_summary_row(_total_row_num, "TOTAL",   _SUM_BG, _lbl_font_sum, _num_font_sum, _sum_border)
-    _write_summary_row(_avg_row_num,   "AVERAGE", _AVG_BG, _lbl_font_avg, _num_font_avg, _avg_border)
-
     ws.freeze_panes = "A4"
     ws.auto_filter.ref = f"A3:{get_column_letter(_total_cols)}{3 + len(merged_rows)}"
+
+    # ── NEW SHEET: Net Income + Amortization ─────────────────────────
+    ws_nia = wb.create_sheet("Net Income + Amortization")
+
+    _NIA_COLS = [
+        "Client ID",
+        "Applicant",
+        "Net Income + Amortization",
+        "% New Net Income to Amortization",
+        "Risk Label",
+        "Risk Reasoning",
+    ]
+    _NIA_COL_WIDTHS = [18, 30, 28, 32, 14, 40]
+    _nia_total_cols = len(_NIA_COLS)
+
+    # Row 1 — Title banner
+    ws_nia.merge_cells(start_row=1, start_column=1, end_row=1, end_column=_nia_total_cols)
+    _nia_b = ws_nia.cell(1, 1, "📊  NET INCOME + AMORTIZATION — Analysis Report")
+    _nia_b.fill      = PatternFill("solid", fgColor=_C_BAN_BG)
+    _nia_b.font      = Font(bold=True, size=13, color=_C_HDR_FG, name="Calibri")
+    _nia_b.alignment = Alignment(horizontal="left", vertical="center", indent=1)
+    ws_nia.row_dimensions[1].height = 28
+
+    # Row 2 — Meta info
+    ws_nia.merge_cells(start_row=2, start_column=1, end_row=2, end_column=_nia_total_cols)
+    _nia_m2 = ws_nia.cell(2, 1,
+        f"Generated: {_now_str}     "
+        f"Rows: {len(merged_rows)}     "
+        f"Net Income + Amortization = Total Net Income (Sim) + Total Current Amortization"
+    )
+    _nia_m2.fill      = PatternFill("solid", fgColor=_C_META_BG)
+    _nia_m2.font      = Font(italic=True, size=9, color=_C_META_FG, name="Calibri")
+    _nia_m2.alignment = Alignment(horizontal="left", vertical="center", indent=1)
+    ws_nia.row_dimensions[2].height = 16
+
+    # Row 3 — Important Notice
+    ws_nia.merge_cells(start_row=3, start_column=1, end_row=3, end_column=_nia_total_cols)
+    _nia_notice = ws_nia.cell(3, 1,
+        "⚠  IMPORTANT NOTICE: Not all Net Income and Amortization figures in this report are "
+        "guaranteed to be accurate. The simulator ASSUMES that ALL clients have an amortization "
+        "obligation. This may not reflect reality — some clients may have NO active amortization. "
+        "Please DOUBLE-CHECK each client record to verify whether the client actually has "
+        "amortization before acting on any risk label or percentage shown in this sheet."
+    )
+    _nia_notice.fill      = PatternFill("solid", fgColor="FFF3CD")
+    _nia_notice.font      = Font(bold=True, size=9, color="856404", name="Calibri")
+    _nia_notice.alignment = Alignment(horizontal="left", vertical="top", indent=2, wrap_text=True)
+    _nia_notice.border    = Border(
+        left=Side(border_style="medium", color="856404"),
+        right=Side(border_style="medium", color="856404"),
+        top=Side(border_style="medium", color="856404"),
+        bottom=Side(border_style="medium", color="856404"),
+    )
+    ws_nia.row_dimensions[3].height = 54
+
+    # Row 4 — Column headers
+    for ci, (h, cw) in enumerate(zip(_NIA_COLS, _NIA_COL_WIDTHS), 1):
+        cell = ws_nia.cell(4, ci, h)
+        cell.fill      = PatternFill("solid", fgColor=_C_HDR_BG)
+        cell.font      = Font(bold=True, size=9, color=_C_HDR_FG, name="Calibri")
+        cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+        cell.border    = _hdr_bot
+        ws_nia.column_dimensions[get_column_letter(ci)].width = cw
+    ws_nia.row_dimensions[4].height = 32
+
+    # Find column indices in "Client Impact Merged" sheet for cross-sheet formulas
+    # Columns in all_output_headers that we need to reference:
+    def _col_idx(header_name):
+        try:
+            return all_output_headers.index(header_name) + 1
+        except ValueError:
+            return None
+
+    _ci_client_id     = _col_idx("Client ID")
+    _ci_applicant     = _col_idx("Applicant")
+    _ci_sim_net       = _col_idx("Total Net Income (Sim)")
+    _ci_amort         = _col_idx("Total Current Amortization")
+    _ci_risk_label    = _col_idx("Risk Label")
+    _ci_risk_reason   = _col_idx("Risk Reasoning")
+
+    _NIA_NUM_FMT = '"\u20b1"#,##0.00'
+    _NIA_PCT_FMT = '0.0"%"'
+
+    # Pre-compute per-row NIA values so Risk Label uses the NIA percentage,
+    # not the CIM percentage — these are different formulas and produce
+    # different numbers, so the risk label must be evaluated independently.
+    _active_ranges = getattr(self, "_sim_risk_ranges", None)
+
+    def _parse_money(val):
+        """Robustly parse a formatted money string or raw float back to float.
+        Handles: ₱1,234.56  /  ₱-1,234.56  /  -₱1,234.56  /  (₱1,234.56)  / raw float."""
+        if val is None:
+            return 0.0
+        if isinstance(val, (int, float)):
+            return float(val)
+        s = str(val).strip()
+        # Raw-float key stored by impact_rows builder — use directly
+        negative = False
+        if s.startswith("(") and s.endswith(")"):
+            s = s[1:-1]; negative = True   # accounting notation
+        s = s.replace("\u20b1", "").replace("₱", "").replace(",", "").strip()
+        if s.startswith("-"):
+            negative = not negative   # double-negative → positive
+            s = s[1:]
+        try:
+            v = float(s or 0)
+            return -v if negative else v
+        except (ValueError, TypeError):
+            return 0.0
+
+    _nia_row_meta: list[dict] = []
+    for _row in merged_rows:
+        # Prefer raw float stored under _raw_ key (written by impact_rows builder);
+        # fall back to parsing the formatted string.
+        _sn = _row.get("_raw_sim_net_income")
+        if _sn is None:
+            _sn = _parse_money(_row.get("Total Net Income (Sim)"))
+        else:
+            _sn = float(_sn)
+        _am = _row.get("_raw_current_amort")
+        if _am is None:
+            _am = _parse_money(_row.get("Total Current Amortization") or _row.get("Total Current Amort"))
+        else:
+            _am = float(_am)
+        _nia_net = _sn + _am
+        # Zero amortization → risk is N/A (sentinel -2.0).
+        # Negative nia_net → negative income (sentinel -1.0).
+        # Otherwise calculate normally.
+        if _am == 0:
+            _nia_pct = -2.0  # sentinel: no amortization — risk is N/A
+        elif _nia_net < 0:
+            _nia_pct = -1.0  # sentinel: negative income
+        elif _nia_net > 0:
+            _nia_pct = _am / _nia_net * 100.0
+        else:
+            _nia_pct = 0.0
+        _nia_risk = _sim_pct_net_to_amort_label(_nia_pct, _active_ranges)
+        _nia_reasoning = _sim_build_risk_reasoning(_nia_risk, _nia_pct)
+        _nia_row_meta.append({
+            "sim_net":       _sn,
+            "amort":         _am,
+            "nia_net":       _nia_net,
+            "nia_pct":       _nia_pct,
+            "nia_risk":      _nia_risk,
+            "nia_reasoning": _nia_reasoning,
+        })
+
+    # Data rows — NIA values are static (computed above); only Client ID / Applicant
+    # pull via cross-sheet formula from "Client Impact Merged".
+    # NOTE: row_num starts at 5 because row 3 is now the important notice and row 4 is headers.
+    for ri, _row in enumerate(merged_rows):
+        row_num   = 5 + ri
+        src_row   = 4 + ri   # "Client Impact Merged" data still starts at row 4
+        src_sheet = "'Client Impact Merged'"
+
+        _meta = _nia_row_meta[ri]
+        nia_risk_label = _meta["nia_risk"]
+        if nia_risk_label in _risk_colors:
+            nia_row_bg, _nia_risk_fg, _ = _risk_colors[nia_risk_label]
+        else:
+            nia_row_bg   = _C_ROW_ODD if ri % 2 == 0 else _C_ROW_EVEN
+            _nia_risk_fg = "374151"
+
+        _nia_rf        = PatternFill("solid", fgColor=nia_row_bg)
+        _nia_base_font = Font(size=9, color="374151", name="Calibri")
+        _nia_num_font  = Font(size=9, color=_C_NUM,   name="Calibri")
+        _nia_risk_font = Font(bold=True, size=9, color=_nia_risk_fg, name="Calibri")
+        _nia_pct_font  = Font(size=9, color="374151", name="Calibri")
+        _nia_al_l = Alignment(horizontal="left",   vertical="center")
+        _nia_al_c = Alignment(horizontal="center", vertical="center")
+        _nia_al_r = Alignment(horizontal="right",  vertical="center")
+
+        # Col 1: Client ID
+        if _ci_client_id:
+            c1 = ws_nia.cell(row_num, 1, f"={src_sheet}!{get_column_letter(_ci_client_id)}{src_row}")
+        else:
+            c1 = ws_nia.cell(row_num, 1, str(_row.get("Client ID") or ""))
+        c1.fill = _nia_rf; c1.font = _nia_base_font
+        c1.alignment = _nia_al_l; c1.border = _grid_m
+
+        # Col 2: Applicant
+        if _ci_applicant:
+            c2 = ws_nia.cell(row_num, 2, f"={src_sheet}!{get_column_letter(_ci_applicant)}{src_row}")
+        else:
+            c2 = ws_nia.cell(row_num, 2, str(_row.get("Applicant") or ""))
+        c2.fill = _nia_rf; c2.font = _nia_base_font
+        c2.alignment = _nia_al_l; c2.border = _grid_m
+
+        # Col 3: Net Income + Amortization — static computed value
+        c3 = ws_nia.cell(row_num, 3, _meta["nia_net"])
+        c3.number_format = _NIA_NUM_FMT
+        c3.fill = _nia_rf; c3.font = _nia_num_font
+        c3.alignment = _nia_al_r; c3.border = _grid_m
+
+        # Col 4: % New Net Income to Amortization — static computed value,
+        # evaluated using the live risk ranges (NOT copied from CIM).
+        # Sentinel -2.0 means zero amortization (N/A); -1.0 means negative income.
+        _nia_pct_val = _meta["nia_pct"]
+        if _nia_pct_val == -2.0:
+            c4 = ws_nia.cell(row_num, 4, "N/A (No Amortization)")
+            c4.font = Font(italic=True, size=9, color=_C_META_FG, name="Calibri")
+        elif _nia_pct_val < 0:
+            c4 = ws_nia.cell(row_num, 4, _NEGATIVE_INCOME_PCT_DISPLAY)
+            c4.font = Font(italic=True, size=9, color=_C_HIGH_FG, name="Calibri")
+        else:
+            c4 = ws_nia.cell(row_num, 4, _nia_pct_val)
+            c4.number_format = _NIA_PCT_FMT
+            c4.font = _nia_pct_font
+        c4.fill = _nia_rf
+        c4.alignment = _nia_al_c; c4.border = _grid_m
+
+        # Col 5: Risk Label — freshly computed from NIA pct using live risk ranges
+        c5 = ws_nia.cell(row_num, 5, nia_risk_label)
+        c5.fill = _nia_rf; c5.font = _nia_risk_font
+        c5.alignment = _nia_al_c; c5.border = _grid_m
+
+        # Col 6: Risk Reasoning — freshly computed from NIA risk label
+        c6 = ws_nia.cell(row_num, 6, _meta["nia_reasoning"])
+        c6.fill = _nia_rf; c6.font = _nia_base_font
+        c6.alignment = _nia_al_l; c6.border = _grid_m
+
+        ws_nia.row_dimensions[row_num].height = 18
+
+    ws_nia.freeze_panes = "A5"
+    ws_nia.auto_filter.ref = f"A4:F{4 + len(merged_rows)}"
+
+    # ── NEW SHEET: Risk Summary ────────────────────────────────────────
+    # Shows count of HIGH / MEDIUM / LOW clients based on NIA Risk Label.
+    # ─────────────────────────────────────────────────────────────────
+    ws_sum = wb.create_sheet("Risk Summary")
+
+    _high_count   = sum(1 for m in _nia_row_meta if m["nia_risk"] == "HIGH" or "NEGATIVE" in str(m.get("nia_risk","")).upper())
+    _medium_count = sum(1 for m in _nia_row_meta if m["nia_risk"] == "MEDIUM")
+    _low_count    = sum(1 for m in _nia_row_meta if m["nia_risk"] == "LOW")
+    _total_count  = len(_nia_row_meta)
+
+    # ── palette (reuse existing vars in scope) ────────────────────────
+    _rs_navy     = _C_HDR_BG    # "1A3A5C"
+    _rs_white    = "FFFFFF"
+    _rs_banner   = _C_BAN_BG    # "14526E"
+    _rs_meta_bg  = _C_META_BG   # "EAF4F8"
+    _rs_meta_fg  = _C_META_FG   # "14526E"
+    _thin_rs  = Side(border_style="thin",   color="D5DCE4")
+    _thick_rs = Side(border_style="medium", color=_rs_navy)
+    _grid_rs  = Border(left=_thin_rs, right=_thin_rs, top=_thin_rs, bottom=_thin_rs)
+    _hdr_rs   = Border(left=_thin_rs, right=_thin_rs, top=_thin_rs, bottom=_thick_rs)
+
+    # Column widths
+    ws_sum.column_dimensions["A"].width = 26
+    ws_sum.column_dimensions["B"].width = 18
+    ws_sum.column_dimensions["C"].width = 18
+
+    # Row 1 — Title banner
+    ws_sum.merge_cells("A1:C1")
+    _rs_b = ws_sum.cell(1, 1, "📊  RISK SUMMARY — Based on Net Income + Amortization")
+    _rs_b.fill      = PatternFill("solid", fgColor=_rs_banner)
+    _rs_b.font      = Font(bold=True, size=13, color=_rs_white, name="Calibri")
+    _rs_b.alignment = Alignment(horizontal="left", vertical="center", indent=1)
+    ws_sum.row_dimensions[1].height = 28
+
+    # Row 2 — Meta
+    ws_sum.merge_cells("A2:C2")
+    _rs_m2 = ws_sum.cell(2, 1,
+        f"Generated: {_now_str}     Total clients: {_total_count}     "
+        f"Risk thresholds: LOW ≤35% | MEDIUM 36–70% | HIGH >70%"
+    )
+    _rs_m2.fill      = PatternFill("solid", fgColor=_rs_meta_bg)
+    _rs_m2.font      = Font(italic=True, size=9, color=_rs_meta_fg, name="Calibri")
+    _rs_m2.alignment = Alignment(horizontal="left", vertical="center", indent=1)
+    ws_sum.row_dimensions[2].height = 16
+
+    # Row 3 — Column headers
+    for ci3, hdr_txt in enumerate(["Risk Level", "Client Count", "% of Total"], 1):
+        _hc = ws_sum.cell(3, ci3, hdr_txt)
+        _hc.fill      = PatternFill("solid", fgColor=_rs_navy)
+        _hc.font      = Font(bold=True, size=9, color=_rs_white, name="Calibri")
+        _hc.alignment = Alignment(horizontal="center", vertical="center")
+        _hc.border    = _hdr_rs
+    ws_sum.row_dimensions[3].height = 28
+
+    # Data rows — HIGH / MEDIUM / LOW
+    _sum_data = [
+        ("HIGH",   _high_count,   _C_HIGH_BG, _C_HIGH_FG),
+        ("MEDIUM", _medium_count, _C_MED_BG,  _C_MED_FG),
+        ("LOW",    _low_count,    _C_LOW_BG,  _C_LOW_FG),
+    ]
+    for row_offset, (lbl, cnt, bg, fg) in enumerate(_sum_data):
+        rn = 4 + row_offset
+        ws_sum.row_dimensions[rn].height = 24
+        pct_of_total = (cnt / _total_count * 100.0) if _total_count > 0 else 0.0
+
+        _ca = ws_sum.cell(rn, 1, lbl)
+        _ca.fill      = PatternFill("solid", fgColor=bg)
+        _ca.font      = Font(bold=True, size=11, color=fg, name="Calibri")
+        _ca.alignment = Alignment(horizontal="left", vertical="center", indent=1)
+        _ca.border    = _grid_rs
+
+        _cb = ws_sum.cell(rn, 2, cnt)
+        _cb.fill      = PatternFill("solid", fgColor=bg)
+        _cb.font      = Font(bold=True, size=11, color=fg, name="Calibri")
+        _cb.alignment = Alignment(horizontal="center", vertical="center")
+        _cb.border    = _grid_rs
+
+        _cc = ws_sum.cell(rn, 3, f"{pct_of_total:.1f}%")
+        _cc.fill      = PatternFill("solid", fgColor=bg)
+        _cc.font      = Font(size=10, color=fg, name="Calibri")
+        _cc.alignment = Alignment(horizontal="center", vertical="center")
+        _cc.border    = _grid_rs
+
+    # Total row
+    _rt = 7
+    ws_sum.row_dimensions[_rt].height = 22
+    for ci3, val in enumerate([f"TOTAL  ({_total_count} clients)", _total_count, "100.0%"], 1):
+        _tc = ws_sum.cell(_rt, ci3, val)
+        _tc.fill      = PatternFill("solid", fgColor=_rs_navy)
+        _tc.font      = Font(bold=True, size=9, color=_rs_white, name="Calibri")
+        _tc.alignment = Alignment(horizontal="center" if ci3 > 1 else "left",
+                                  vertical="center", indent=(1 if ci3 == 1 else 0))
+        _tc.border    = Border(left=_thin_rs, right=_thin_rs,
+                               top=_thick_rs, bottom=_thin_rs)
+
+    # ── HIGH RISK CLIENT LIST (below the summary counts) ─────────────
+    # Columns: #  |  Client ID  |  Applicant  |  % NIA  |  Net Income+Amort  |  Risk Reasoning
+    _rs_hr_cols  = ["#", "Client ID", "Applicant", "% Net → Amort (NIA)", "Net Income + Amort", "Risk Reasoning"]
+    _rs_hr_widths = [6, 16, 32, 22, 22, 55]
+
+    # Extend column widths for columns D, E, F (1-indexed: 4,5,6)
+    for _ci_ext, _w_ext in enumerate(_rs_hr_widths, 1):
+        ws_sum.column_dimensions[get_column_letter(_ci_ext)].width = _w_ext
+
+    # Spacer row
+    _rs_spacer = 9
+    ws_sum.row_dimensions[8].height = 10
+
+    # Section banner
+    ws_sum.merge_cells(f"A{_rs_spacer}:F{_rs_spacer}")
+    _rs_hbanner = ws_sum.cell(_rs_spacer, 1, "🔴  HIGH RISK CLIENTS — % Net Income to Amortization > 70%")
+    _rs_hbanner.fill      = PatternFill("solid", fgColor=_C_HIGH_FG)
+    _rs_hbanner.font      = Font(bold=True, size=11, color="FFFFFF", name="Calibri")
+    _rs_hbanner.alignment = Alignment(horizontal="left", vertical="center", indent=1)
+    ws_sum.row_dimensions[_rs_spacer].height = 24
+
+    # Column headers
+    _rs_hr_hdr_row = _rs_spacer + 1
+    for _ci_h, _htxt in enumerate(_rs_hr_cols, 1):
+        _hcell = ws_sum.cell(_rs_hr_hdr_row, _ci_h, _htxt)
+        _hcell.fill      = PatternFill("solid", fgColor=_rs_navy)
+        _hcell.font      = Font(bold=True, size=9, color=_rs_white, name="Calibri")
+        _hcell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+        _hcell.border    = _hdr_rs
+    ws_sum.row_dimensions[_rs_hr_hdr_row].height = 28
+
+    # Collect HIGH risk rows (parallel zip of merged_rows + _nia_row_meta)
+    _high_clients = [
+        (mrow, meta)
+        for mrow, meta in zip(merged_rows, _nia_row_meta)
+        if meta["nia_risk"] == "HIGH" or "NEGATIVE" in str(meta.get("nia_risk","")).upper()
+    ]
+    # Sort by NIA % descending
+    _high_clients.sort(key=lambda x: -(x[1]["nia_pct"] or 0.0))
+
+    if _high_clients:
+        _rs_hr_data_start = _rs_hr_hdr_row + 1
+        for _hri, (mrow, meta) in enumerate(_high_clients):
+            _hrn = _rs_hr_data_start + _hri
+            ws_sum.row_dimensions[_hrn].height = 20
+            _hr_bg = "FEF0EE"   # soft red tint
+            _hr_bg2 = "FDE8E5"  # slightly darker alternating
+            _row_bg = _hr_bg if _hri % 2 == 0 else _hr_bg2
+            _hr_fill = PatternFill("solid", fgColor=_row_bg)
+            _hr_font_lbl = Font(size=9, color="374151", name="Calibri")
+            _hr_font_pct = Font(bold=True, size=9, color=_C_HIGH_FG, name="Calibri")
+
+            _cells_vals = [
+                (_hri + 1,                     "center", _hr_font_lbl),
+                (str(mrow.get("Client ID") or "—"),   "center", _hr_font_lbl),
+                (str(mrow.get("Applicant") or "—"),   "left",   _hr_font_lbl),
+                ((_NEGATIVE_INCOME_PCT_DISPLAY if meta["nia_pct"] < 0 else f"{meta['nia_pct']:.1f}%"), "center", _hr_font_pct),
+                (meta["nia_net"],                       "right",  _hr_font_lbl),
+                (meta["nia_reasoning"],                 "left",   _hr_font_lbl),
+            ]
+            for _ci_d, (_val, _anchor, _fnt) in enumerate(_cells_vals, 1):
+                _dc = ws_sum.cell(_hrn, _ci_d, _val)
+                _dc.fill      = _hr_fill
+                _dc.font      = _fnt
+                _dc.alignment = Alignment(horizontal=_anchor, vertical="center",
+                                          indent=(1 if _anchor == "left" else 0),
+                                          wrap_text=(_ci_d == 6))
+                _dc.border    = _grid_rs
+                if _ci_d == 5:
+                    _dc.number_format = _NIA_NUM_FMT
+    else:
+        _no_high_row = _rs_hr_hdr_row + 1
+        ws_sum.merge_cells(f"A{_no_high_row}:F{_no_high_row}")
+        _nc = ws_sum.cell(_no_high_row, 1, "✅  No HIGH risk clients found under current simulator settings.")
+        _nc.fill      = PatternFill("solid", fgColor="EDFAF1")
+        _nc.font      = Font(italic=True, size=9, color="1E8449", name="Calibri")
+        _nc.alignment = Alignment(horizontal="left", vertical="center", indent=1)
+        ws_sum.row_dimensions[_no_high_row].height = 20
+
+    # ── NEW SHEET: Sheet Comparison ───────────────────────────────────
+    # Compares "Client Impact Merged" vs "Net Income + Amortization" side by side.
+    #
+    # Columns:
+    #   Client ID | Applicant
+    #   [CIM] Total Net Income (Sim)  | [NIA] Net Income + Amortization  | Δ Value
+    #   [CIM] % Net → Amort           | [NIA] % New Net Income to Amort  | Δ %
+    #   [CIM] Risk Label              | [NIA] Risk Label                 | Label Changed?
+    # ─────────────────────────────────────────────────────────────────
+    ws_cmp = wb.create_sheet("Sheet Comparison")
+
+    _CMP_COLS = [
+        "Client ID",
+        "Applicant",
+        # Net Income comparison
+        "Net Income (Sim)\n[Client Impact Merged]",
+        "Net Income + Amortization\n[NIA Sheet]",
+        "Total Current Amortization\n[Client Impact Merged]",
+        # Percentage comparison
+        "% Net → Amort\n[Client Impact Merged]",
+        "% New Net Income to Amort\n[NIA Sheet]",
+        "Δ % (NIA − CIM)",
+        # Risk label comparison
+        "Risk Label\n[Client Impact Merged]",
+        "Risk Label\n[NIA Sheet]",
+        "Label Changed?",
+    ]
+    _CMP_COL_WIDTHS = [16, 28, 28, 28, 26, 24, 26, 20, 20, 20, 16]
+    _cmp_total_cols = len(_CMP_COLS)
+
+    # Colour palette — reuse existing vars plus a few comparison-specific ones
+    _C_GRP_NET  = "1A5276"   # dark blue  — group header for Net Income columns
+    _C_GRP_PCT  = "145A32"   # dark green — group header for % columns
+    _C_GRP_RSK  = "6E2F1A"   # dark red   — group header for Risk columns
+    _C_DELTA_POS = "E8F8F0"  # light green bg — NIA > CIM
+    _C_DELTA_NEG = "FDECEA"  # light red bg   — NIA < CIM
+    _C_DELTA_NEU = "F4F6F7"  # neutral grey   — equal
+    _C_CHANGED   = "FDECEA"
+    _C_SAME      = "EDFAF1"
+
+    _thin_c  = Side(border_style="thin",   color=_C_BORDER)
+    _thick_c = Side(border_style="medium", color=_C_HDR_BG)
+    _grid_c  = Border(left=_thin_c, right=_thin_c, top=_thin_c, bottom=_thin_c)
+    _hdr_c   = Border(left=_thin_c, right=_thin_c, top=_thin_c, bottom=_thick_c)
+
+    # Row 1 — Title banner
+    ws_cmp.merge_cells(start_row=1, start_column=1, end_row=1, end_column=_cmp_total_cols)
+    _cmp_b = ws_cmp.cell(1, 1, "🔍  SHEET COMPARISON — Client Impact Merged vs Net Income + Amortization")
+    _cmp_b.fill      = PatternFill("solid", fgColor=_C_BAN_BG)
+    _cmp_b.font      = Font(bold=True, size=13, color=_C_HDR_FG, name="Calibri")
+    _cmp_b.alignment = Alignment(horizontal="left", vertical="center", indent=1)
+    ws_cmp.row_dimensions[1].height = 28
+
+    # Row 2 — Meta info
+    ws_cmp.merge_cells(start_row=2, start_column=1, end_row=2, end_column=_cmp_total_cols)
+    _cmp_m2 = ws_cmp.cell(2, 1,
+        f"Generated: {_now_str}     "
+        f"Rows: {len(merged_rows)}     "
+        "Δ = NIA Sheet value minus Client Impact Merged value     "
+        "Label Changed? = YES if Risk Label differs between sheets"
+    )
+    _cmp_m2.fill      = PatternFill("solid", fgColor=_C_META_BG)
+    _cmp_m2.font      = Font(italic=True, size=9, color=_C_META_FG, name="Calibri")
+    _cmp_m2.alignment = Alignment(horizontal="left", vertical="center", indent=1)
+    ws_cmp.row_dimensions[2].height = 16
+
+    # Row 3 — Group sub-headers (colour-coded spans)
+    _grp_specs = [
+        # (start_col, end_col, label, bg_color)
+        (1,  2,  "CLIENT IDENTIFIER",      _C_HDR_BG),
+        (3,  5,  "NET INCOME COMPARISON",  _C_GRP_NET),
+        (6,  8,  "PERCENTAGE COMPARISON",  _C_GRP_PCT),
+        (9,  11, "RISK LABEL COMPARISON",  _C_GRP_RSK),
+    ]
+    for gc_start, gc_end, g_label, g_bg in _grp_specs:
+        if gc_start == gc_end:
+            ws_cmp.cell(3, gc_start, g_label)
+        else:
+            ws_cmp.merge_cells(start_row=3, start_column=gc_start,
+                               end_row=3,   end_column=gc_end)
+            ws_cmp.cell(3, gc_start, g_label)
+        for gci in range(gc_start, gc_end + 1):
+            _gc = ws_cmp.cell(3, gci)
+            _gc.fill      = PatternFill("solid", fgColor=g_bg)
+            _gc.font      = Font(bold=True, size=8, color=_C_HDR_FG, name="Calibri")
+            _gc.alignment = Alignment(horizontal="center", vertical="center")
+            _gc.border    = _thin_c
+    ws_cmp.row_dimensions[3].height = 18
+
+    # Row 4 — Column headers
+    for ci, (h, cw) in enumerate(zip(_CMP_COLS, _CMP_COL_WIDTHS), 1):
+        cell = ws_cmp.cell(4, ci, h)
+        cell.fill      = PatternFill("solid", fgColor=_C_HDR_BG)
+        cell.font      = Font(bold=True, size=9, color=_C_HDR_FG, name="Calibri")
+        cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+        cell.border    = _hdr_c
+        ws_cmp.column_dimensions[get_column_letter(ci)].width = cw
+    ws_cmp.row_dimensions[4].height = 36
+
+    # Helper: column letter lookups in source sheets
+    def _cim_col(header_name):
+        try:
+            return get_column_letter(all_output_headers.index(header_name) + 1)
+        except ValueError:
+            return None
+
+    _cim_sheet       = "'Client Impact Merged'"
+    _nia_sheet       = "'Net Income + Amortization'"
+
+    _cim_client_id   = _cim_col("Client ID")
+    _cim_applicant   = _cim_col("Applicant")
+    _cim_sim_net     = _cim_col("Total Net Income (Sim)")
+    _cim_amort       = _cim_col("Total Current Amortization")
+    _cim_pct_amort   = _cim_col("% Net → Amort")
+    _cim_risk        = _cim_col("Risk Label")
+
+    # NIA sheet fixed column letters (C=3, D=4, E=5, F=6)
+    _nia_net_col     = "C"   # Net Income + Amortization
+    _nia_pct_col     = "D"   # % New Net Income to Amortization
+    _nia_risk_col    = "E"   # Risk Label
+
+    _CMP_NUM_FMT = '"₱"#,##0.00;"-₱"#,##0.00'
+    _CMP_PCT_FMT = '0.0"%"'
+    _CMP_DLT_FMT = '"+₱"#,##0.00;"-₱"#,##0.00;"-"'
+    _CMP_DPT_FMT = '"+0.0%";"-0.0%";"-"'
+
+    _data_start_cmp = 5
+
+    for ri, _row in enumerate(merged_rows):
+        row_num  = 5 + ri
+        src_row  = 4 + ri   # data starts at row 4 in "Client Impact Merged"
+
+        _meta    = _nia_row_meta[ri]   # pre-computed NIA values
+
+        # Base row background
+        _base_bg = _C_ROW_ODD if ri % 2 == 0 else _C_ROW_EVEN
+        _cmp_rf  = PatternFill("solid", fgColor=_base_bg)
+
+        _f_base  = Font(size=9, color="374151",  name="Calibri")
+        _f_num   = Font(size=9, color=_C_NUM,    name="Calibri")
+        _al_l    = Alignment(horizontal="left",   vertical="center")
+        _al_c    = Alignment(horizontal="center", vertical="center")
+        _al_r    = Alignment(horizontal="right",  vertical="center")
+
+        def _plain(col_n, val, fmt=None, font=None, align=None, bg=None):
+            _c = ws_cmp.cell(row_num, col_n, val)
+            _c.fill      = PatternFill("solid", fgColor=(bg or _base_bg))
+            _c.font      = font or _f_base
+            _c.alignment = align or _al_l
+            _c.border    = _grid_c
+            if fmt:
+                _c.number_format = fmt
+            return _c
+
+        # Col 1: Client ID
+        if _cim_client_id:
+            _plain(1, f"={_cim_sheet}!{_cim_client_id}{src_row}")
+        else:
+            _plain(1, str(_row.get("Client ID") or ""))
+
+        # Col 2: Applicant
+        if _cim_applicant:
+            _plain(2, f"={_cim_sheet}!{_cim_applicant}{src_row}")
+        else:
+            _plain(2, str(_row.get("Applicant") or ""))
+
+        # ── NET INCOME COMPARISON ─────────────────────────────────────
+        # Col 3: [CIM] Total Net Income (Sim) — cross-sheet formula
+        if _cim_sim_net:
+            _plain(3, f"={_cim_sheet}!{_cim_sim_net}{src_row}",
+                   fmt=_CMP_NUM_FMT, font=_f_num, align=_al_r)
+        else:
+            _plain(3, "", align=_al_r)
+
+        # Col 4: [NIA] Net Income + Amortization — static value from pre-computed meta
+        # Use red font when the value is negative so it is visually distinct.
+        _c4_font = Font(size=9, color="C0392B" if _meta["nia_net"] < 0 else _C_NUM, name="Calibri")
+        _plain(4, _meta["nia_net"], fmt=_CMP_NUM_FMT, font=_c4_font, align=_al_r)
+
+        # Col 5: Total Current Amortization — cross-sheet formula from CIM for basis
+        if _cim_amort:
+            _plain(5, f"={_cim_sheet}!{_cim_amort}{src_row}",
+                   fmt=_CMP_NUM_FMT, font=_f_num, align=_al_r)
+        else:
+            _plain(5, _meta["amort"], fmt=_CMP_NUM_FMT, font=_f_num, align=_al_r)
+
+        # ── PERCENTAGE COMPARISON ─────────────────────────────────────
+        # Col 6: [CIM] % Net → Amort — cross-sheet formula
+        if _cim_pct_amort:
+            _plain(6, f"={_cim_sheet}!{_cim_pct_amort}{src_row}",
+                   fmt=_CMP_PCT_FMT, align=_al_c)
+        else:
+            _plain(6, "", align=_al_c)
+
+        # Col 7: [NIA] % New Net Income to Amort — static value from pre-computed meta.
+        # Sentinel -2.0 means zero amortization (N/A); -1.0 means negative income.
+        if _meta["nia_pct"] == -2.0:
+            _c7 = ws_cmp.cell(row_num, 7, "N/A (No Amortization)")
+            _c7.fill      = PatternFill("solid", fgColor=_base_bg)
+            _c7.font      = Font(italic=True, size=9, color=_C_META_FG, name="Calibri")
+            _c7.alignment = _al_c
+            _c7.border    = _grid_c
+        elif _meta["nia_pct"] < 0:
+            _c7 = ws_cmp.cell(row_num, 7, _NEGATIVE_INCOME_PCT_DISPLAY)
+            _c7.fill      = PatternFill("solid", fgColor=_base_bg)
+            _c7.font      = Font(italic=True, size=9, color=_C_HIGH_FG, name="Calibri")
+            _c7.alignment = _al_c
+            _c7.border    = _grid_c
+        else:
+            _plain(7, _meta["nia_pct"], fmt=_CMP_PCT_FMT, align=_al_c)
+
+        # Col 8: Delta % (NIA pct − CIM pct) — both evaluated on same raw data,
+        # different denominators, so the sign is meaningful.
+        # When NIA pct is either sentinel, delta is not meaningful; show "—".
+        if _meta["nia_pct"] < 0:
+            _c8 = ws_cmp.cell(row_num, 8, "—")
+            _c8.fill      = PatternFill("solid", fgColor=_C_DELTA_NEU)
+            _c8.font      = Font(italic=True, size=9, color=_C_HIGH_FG, name="Calibri")
+            _c8.alignment = _al_c
+            _c8.border    = _grid_c
+        else:
+            try:
+                _cim_pct_v = float(str(_row.get("% Net \u2192 Amort") or "0").replace("%",""))
+            except Exception:
+                _cim_pct_v = 0.0
+            _dp     = _meta["nia_pct"] - _cim_pct_v
+            _c8_bg  = _C_DELTA_POS if _dp > 0.005 else (_C_DELTA_NEG if _dp < -0.005 else _C_DELTA_NEU)
+            _plain(8, _dp, fmt=_CMP_PCT_FMT,
+                   font=Font(size=9, bold=True, color="374151", name="Calibri"),
+                   align=_al_c, bg=_c8_bg)
+
+        # ── RISK LABEL COMPARISON ─────────────────────────────────────
+        # CIM risk label — from the merged_rows dict (written statically to CIM sheet)
+        _cim_risk_val = str(_row.get("Risk Label") or "").upper()
+        _nia_risk_val = _meta["nia_risk"]
+
+        # Col 9: [CIM] Risk Label — cross-sheet formula to CIM sheet
+        if _cim_risk:
+            _plain(9, f"={_cim_sheet}!{_cim_risk}{src_row}", align=_al_c,
+                   font=Font(size=9, bold=True,
+                             color=_risk_colors.get(_cim_risk_val, (None, "374151", False))[1],
+                             name="Calibri"))
+        else:
+            _plain(9, _cim_risk_val, align=_al_c)
+
+        # Col 10: [NIA] Risk Label — static value (NIA computes its own label)
+        _plain(10, _nia_risk_val, align=_al_c,
+               font=Font(size=9, bold=True,
+                         color=_risk_colors.get(_nia_risk_val, (None, "374151", False))[1],
+                         name="Calibri"))
+
+        # Col 11: Label Changed? — compare the two Python-computed risk labels
+        _labels_differ = (_cim_risk_val != _nia_risk_val)
+        _changed_text  = "YES \u26a0" if _labels_differ else "NO \u2713"
+        _c11 = ws_cmp.cell(row_num, 11, _changed_text)
+        _c11.alignment = _al_c
+        _c11.border    = _grid_c
+        _c11.font      = Font(size=9, bold=True, name="Calibri",
+                              color=(_C_HIGH_FG if _labels_differ else "1E8449"))
+        _c11.fill      = PatternFill("solid",
+                                     fgColor=(_C_CHANGED if _labels_differ else _C_SAME))
+
+        ws_cmp.row_dimensions[row_num].height = 18
+
+    # ── TOTAL / AVERAGE summary rows ─────────────────────────────────
+    _cmp_data_end  = 4 + len(merged_rows)
+    _cmp_total_row = _cmp_data_end + 1
+    _cmp_avg_row   = _cmp_data_end + 2
+
+    _SUM_COLS_CMP = {3, 4, 5}   # numeric ₱ columns
+    _PCT_COLS_CMP = {6, 7, 8}   # percentage columns
+
+    def _write_cmp_summary(row_n, label, bg, lbl_f, num_f, brd):
+        rf = PatternFill("solid", fgColor=bg)
+        for ci2 in range(1, _cmp_total_cols + 1):
+            c2 = ws_cmp.cell(row_n, ci2)
+            c2.fill = rf; c2.border = brd
+            cl = get_column_letter(ci2)
+            if ci2 == 1:
+                c2.value = label; c2.font = lbl_f
+                c2.alignment = Alignment(horizontal="left", vertical="center")
+            elif ci2 in _SUM_COLS_CMP:
+                c2.value = (
+                    f"=SUM({cl}{_data_start_cmp}:{cl}{_cmp_data_end})"
+                    if label == "TOTAL"
+                    else f"=AVERAGE({cl}{_data_start_cmp}:{cl}{_cmp_data_end})"
+                )
+                c2.number_format = _CMP_NUM_FMT
+                c2.font = num_f
+                c2.alignment = Alignment(horizontal="right", vertical="center")
+            elif ci2 in _PCT_COLS_CMP:
+                c2.value = (
+                    "" if label == "TOTAL"
+                    else f"=AVERAGE({cl}{_data_start_cmp}:{cl}{_cmp_data_end})"
+                )
+                c2.number_format = _CMP_PCT_FMT
+                c2.font = num_f
+                c2.alignment = Alignment(horizontal="center", vertical="center")
+            else:
+                c2.value = ""; c2.font = lbl_f
+                c2.alignment = Alignment(horizontal="left", vertical="center")
+        ws_cmp.row_dimensions[row_n].height = 18
+
+    ws_cmp.freeze_panes = "A5"
+    ws_cmp.auto_filter.ref = f"A4:{get_column_letter(_cmp_total_cols)}{4 + len(merged_rows)}"
 
     wb.save(out_path)
     matched_count = len(impact_rows) - sum(
@@ -3970,12 +4721,12 @@ def _sim_export_high_risk_clients_excel(self):
         )
 
         sim_net_income = base_net - extra_total
-        if sim_net_income <= 0:
-            pct_net_to_am = 999.0 if current_am > 0 else 0.0
+        if current_am == 0:
+            pct_net_to_am = -2.0  # sentinel: no amortization — risk is N/A
+        elif sim_net_income <= 0:
+            pct_net_to_am = -1.0  # sentinel: negative income
         else:
-            pct_net_to_am = (
-                (current_am / sim_net_income) * 100.0 if current_am > 0 else 0.0
-            )
+            pct_net_to_am = (current_am / sim_net_income) * 100.0
 
         sim_risk = _sim_pct_net_to_amort_label(pct_net_to_am, getattr(self, "_sim_risk_ranges", None))
         risk_reasoning = _sim_build_risk_reasoning(sim_risk, pct_net_to_am)
@@ -4004,7 +4755,7 @@ def _sim_export_high_risk_clients_excel(self):
         })
 
     # Filter to HIGH risk only (>= 71% Net → Amort).
-    high_risk_rows = [r for r in rows if r["sim_risk_label"] == "HIGH"]
+    high_risk_rows = [r for r in rows if r["sim_risk_label"] == "HIGH" or "NEGATIVE" in str(r.get("sim_risk_label", "")).upper()]
 
     if not high_risk_rows:
         messagebox.showinfo(

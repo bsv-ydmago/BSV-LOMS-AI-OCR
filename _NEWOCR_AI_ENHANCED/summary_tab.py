@@ -1264,7 +1264,7 @@ def _resolve_name_similarity(client_name: str,
 #  PUBLIC WRITER  (called from lookup_tab.py)
 # ═══════════════════════════════════════════════════════════════════════
 
-def db_save_applicant(session_id: str, results: dict):
+def db_save_applicant(session_id: str, results: dict, requested_by: str = "unknown") -> str:
     """
     Persist one applicant's Look-Up results to SQLite.
 
@@ -1358,7 +1358,110 @@ def db_save_applicant(session_id: str, results: dict):
         "loan_status":         "",
         "ao_name":             "",
     }
+    # ── If applicant_name already exists: queue overwrite for approval ──
+    # Requirement (user):
+    #   - Before inserting into the Look-Up Summary table (applicants),
+    #     check applicant_name match.
+    #   - If match exists, do NOT overwrite immediately.
+    #   - Instead, enqueue ALL lookup-derived fields into `edit_requests`.
+    #     Admin approves in Approval tab -> actual overwrite happens there.
+    new_name = str(row_data.get("applicant_name") or "").strip()
+    if new_name:
+        with _db_connect() as conn:
+            cur = conn.cursor()
+            cur.execute(
+                """
+                SELECT id, applicant_name,
+                       residence_address, office_address,
+                       income_items, income_total,
+                       business_items, business_total,
+                       household_items, household_total,
+                       net_income,
+                       petrol_risk, transport_risk,
+                       results_json, page_map,
+                       amort_history_total
+                FROM applicants
+                WHERE applicant_name IS NOT NULL
+                  AND TRIM(UPPER(applicant_name)) = TRIM(UPPER(%s))
+                ORDER BY processed_at DESC NULLS LAST, id DESC
+                LIMIT 1
+                """,
+                (new_name,),
+            )
+            existing_row = cur.fetchone()
+
+            if existing_row:
+                cols_desc = [desc[0] for desc in cur.description]
+                existing = dict(zip(cols_desc, existing_row))
+                existing_id = int(existing["id"])
+
+                reason = (
+                    "Look-Up re-extraction overwrite request "
+                    f"(applicant_name match: '{new_name}')"
+                )
+
+                # Only enqueue columns populated by Look-Up extraction.
+                # IMPORTANT: We do NOT enqueue client_id/pn/industry_name/etc
+                # because db_save_applicant intentionally leaves those empty.
+                queue_cols = [
+                    "applicant_name",
+                    "residence_address",
+                    "office_address",
+                    "income_items",
+                    "income_total",
+                    "business_items",
+                    "business_total",
+                    "household_items",
+                    "household_total",
+                    "net_income",
+                    "petrol_risk",
+                    "transport_risk",
+                    "results_json",
+                    "page_map",
+                    "amort_history_total",
+                ]
+
+                queued = 0
+                for col in queue_cols:
+                    new_val = row_data.get(col)
+                    # Skip empty extraction results so we don't erase existing data.
+                    if new_val is None or new_val == "":
+                        continue
+
+                    old_val = existing.get(col)
+                    if old_val == new_val:
+                        continue
+
+                    cur.execute(
+                        """
+                        INSERT INTO edit_requests
+                            (applicant_id, applicant_name, col_name,
+                             old_value, new_value, reason, requested_by)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s)
+                        """,
+                        (
+                            existing_id,
+                            existing.get("applicant_name") or new_name,
+                            col,
+                            old_val,
+                            new_val,
+                            reason,
+                            requested_by,
+                        ),
+                    )
+                    queued += 1
+
+                conn.commit()
+                cur.close()
+
+                # If there were no real changes, treat as noop (no upsert).
+                return "queued_for_approval" if queued > 0 else "noop_name_match"
+
+            cur.close()
+
+    # No applicant_name match: proceed with the existing safe upsert policy.
     _db_upsert(session_id, row_data)
+    return "upserted"
 
 
 # ═══════════════════════════════════════════════════════════════════════
