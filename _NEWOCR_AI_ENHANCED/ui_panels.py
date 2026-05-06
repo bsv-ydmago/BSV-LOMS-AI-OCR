@@ -393,8 +393,9 @@ def _build_left(self, p):
     nav_container = tk.Frame(sidebar, bg=_SB_BG)
     nav_container.pack(fill="x", padx=8)
 
+    _HIDDEN_TABS = {"cibi", "extract", "analysis", "summary"}
     for tab_key, icon, label, badge in _NAV_ITEMS:
-        if tab_key in _allowed:
+        if tab_key in _allowed and tab_key not in _HIDDEN_TABS:
             _build_nav_pill(self, nav_container, tab_key, icon, label, badge)
 
     # Only show the second group + divider if the user can see any of those tabs

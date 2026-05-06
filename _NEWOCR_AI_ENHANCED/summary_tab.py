@@ -1004,6 +1004,10 @@ def _db_update_cell(row_id: int, col_name: str, raw_value: str) -> str:
     if col_name not in _EDITABLE_COLS:
         raise ValueError(f"Column '{col_name}' is not editable.")
 
+    # ── Guard: virtual columns must go through _db_update_virtual_cell ─
+    if col_name in _VIRTUAL_TO_JSON:
+        return _db_update_virtual_cell(row_id, col_name, raw_value)
+
     if col_name in _MONETARY_COLS:
         cleaned = re.sub(r"[^\d.]", "", raw_value.replace(",", "").strip())
         if cleaned == "":

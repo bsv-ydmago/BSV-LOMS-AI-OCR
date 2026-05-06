@@ -991,6 +991,12 @@ def _apply_edit(cur, row: dict):
     if not applicant_id or applicant_id == "—":
         raise ValueError("Missing applicant_id — cannot apply edit.")
 
+    # ── Virtual columns: write into results_json, not a real column ───
+    from summary_tab import _VIRTUAL_TO_JSON, _db_update_virtual_cell
+    if field_name in _VIRTUAL_TO_JSON:
+        _db_update_virtual_cell(int(applicant_id), field_name, new_value)
+        return
+
     sql = f'UPDATE applicants SET "{field_name}" = %s WHERE id = %s'
     cur.execute(sql, (new_value, int(applicant_id)))
 
