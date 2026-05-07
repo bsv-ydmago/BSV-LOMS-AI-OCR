@@ -115,6 +115,7 @@ TABLE_COLS = [
     ("applicant_name",      "Applicant",                           200, False, False),
     ("residence_address",   "Residence Address",                   220, False, True),
     ("office_address",      "Office Address",                      180, False, True),
+    ("cibi_date",           "CI/BI Date",                          140, False, False),
     # ── Populated by Other Data import ───────────────────────────────
     ("industry_name",       "Industry Name",                       160, False, False),
     # ── ★ Virtual — derived from results_json (Look-Up) ──────────────
@@ -158,6 +159,7 @@ TREE_COLS = [c[0] for c in TABLE_COLS] + [_EDIT_ACTION_COL]
 
 LOOKUP_ROWS = [
     ("cibi_place_of_work",      "CI/BI Report",      "Office Address"),
+    ("cibi_date",               "CI/BI Report",      "Date of Report"),
     ("cibi_temp_residence",     "CI/BI Report",      "Residence Address"),
     ("cibi_spouse",             "CI/BI Report",      "Spouse / Employment"),
     ("cibi_spouse_office",      "CI/BI Report",      "Spouse Office Address"),
@@ -604,7 +606,7 @@ def _db_connect():
 # ── All columns that can be patched (never overwrite existing non-null data)
 _PATCHABLE_COLS = [
     # ── Set by Look-Up ───────────────────────────────────────────────
-    "applicant_name", "residence_address", "office_address",
+    "applicant_name", "residence_address", "cibi_date", "office_address",
     "income_items", "income_total",
     "business_items", "business_total",
     "household_items", "household_total",
@@ -741,7 +743,7 @@ def _db_upsert(session_id: str, row_data: dict) -> int:
         cur.execute("""
             INSERT INTO applicants (
                 session_id, processed_at, source_file, status,
-                applicant_name, residence_address, office_address,
+                applicant_name, residence_address, office_address, cibi_date,
                 income_items, income_total,
                 business_items, business_total,
                 household_items, household_total,
@@ -756,7 +758,7 @@ def _db_upsert(session_id: str, row_data: dict) -> int:
                 loan_status, ao_name
             ) VALUES (
                 %(session_id)s, %(processed_at)s, %(source_file)s, %(status)s,
-                %(applicant_name)s, %(residence_address)s, %(office_address)s,
+                %(applicant_name)s, %(residence_address)s, %(office_address)s, %(cibi_date)s,
                 %(income_items)s, %(income_total)s,
                 %(business_items)s, %(business_total)s,
                 %(household_items)s, %(household_total)s,
@@ -970,7 +972,7 @@ def _db_update_other_data_all(matches: list, client_id: str, pn_joined: str,
 # fields (session_id, processed_at, source_file, status, page_map,
 # results_json, petrol_risk, transport_risk) are intentionally excluded.
 _EDITABLE_COLS = {
-    "client_id", "pn", "applicant_name",
+    "client_id", "pn", "applicant_name", "cibi_date",
     # virtual columns — written back into results_json
     "spouse_info", "personal_assets", "business_assets", "business_inventory",
     # item-text columns — real DB columns
@@ -1326,6 +1328,8 @@ def db_save_applicant(session_id: str, results: dict, requested_by: str = "unkno
         "status":            "done",
         # ── Look-Up extracted fields ───────────────────────────────────
         "applicant_name":    results.get("_applicant_name", ""),
+        "cibi_date": (results.get("_cibi_date", "") or
+              (results.get("cibi_date", {}).get("items") or [""])[0]),
         "residence_address": gate.get("residence_address", ""),
         "office_address":    gate.get("office_address", ""),
         "income_items":      _items("income_remittance"),
@@ -1409,6 +1413,7 @@ def db_save_applicant(session_id: str, results: dict, requested_by: str = "unkno
                 # because db_save_applicant intentionally leaves those empty.
                 queue_cols = [
                     "applicant_name",
+                    "cibi_date",
                     "residence_address",
                     "office_address",
                     "income_items",
@@ -5049,6 +5054,7 @@ def _row_to_export_dict(row: dict) -> dict:
         "Client ID":                           row.get("client_id",          "") or "",
         "PN":                                  row.get("pn",                 "") or "",
         "Applicant":                           row.get("applicant_name",     "") or "",
+        "CI/BI Date":                          row.get("cibi_date", "") or "",
         "Residence Address":                   row.get("residence_address",  "") or "",
         "Office Address":                      row.get("office_address",     "") or "",
         "Industry Name":                       row.get("industry_name",      "") or "",

@@ -31,6 +31,7 @@ from summary_tab import db_save_applicant, lookup_summary_notify
 # ── Category master list ──────────────────────────────────────────────
 LOOKUP_ROWS = [
     ("cibi_place_of_work",      "CI/BI Report",      "Office Address",                      "cibi"),
+    ("cibi_date",               "CI/BI Report",      "Date",                      "cibi"),
     ("cibi_temp_residence",     "CI/BI Report",      "Residence Address",                    "cibi"),
     ("cibi_spouse",             "CI/BI Report",      "Spouse / Employment",                  "cibi"),
     ("cibi_spouse_office",      "CI/BI Report",      "Spouse Office Address",                "cibi"),
@@ -878,6 +879,12 @@ def _process_single_file(self, path: str, cancelled) -> None:
     results["_page_map"]       = map_summary
     results["_source_file"]    = fname
     results["_cfa_net_income"] = data_cfaws.get("cfa_net_income", "")
+    
+    _cibi_date_raw = data_cibi_c.get("cibi_date", "").strip()
+    results["_cibi_date"] = _cibi_date_raw
+    # Also inject into the parsed results dict so the cibi_date row in LOOKUP_ROWS gets populated
+    if _cibi_date_raw:
+        results["cibi_date"] = {"items": [_cibi_date_raw], "total": None}
 
     self._lookup_file_data[path]["name"]      = applicant_name
     self._lookup_file_data[path]["gate_data"] = gate_result
@@ -1240,6 +1247,11 @@ SOURCE: The first page of the CI/BI Report document only.
    Do NOT use the spouse's Office Address field for this.
    If blank or absent → return "".
 
+⑩ cibi_date  (plain string)
+   Exact label on form: "Date" / "Date of Report" / "As of" — at the top of the CI/BI page.
+   Value: the handwritten or typed date exactly as written (e.g. "January 15, 2025" or "01/15/2025").
+   If blank or absent → return "".
+
 ④ cibi_spouse  (array)
    Exact labels on form: "Name of Spouse" / "Spouse" / "Husband" / "Wife"
      AND separately: "Employed" / "Self-Employed" / "Occupation" / "Nature of Work"
@@ -1517,6 +1529,7 @@ OUTPUT — return ONLY valid JSON, no other text:
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 {{
   "applicant_name":          "",
+  "cibi_date":               "",
   "residence_address":       "",
   "office_address":          "",
   "cibi_spouse":             [{{"description":"...","amount":"N/A","date":""}}],
@@ -1819,8 +1832,8 @@ def _parse_extraction_response_from_dict(data: dict) -> dict:
     WS_DEDUP_KEYS = {"ws_fuel_diesel", "ws_forwarding", "ws_fertilizer"}
 
     NO_TOTAL_KEYS = {
-        "cibi_place_of_work", "cibi_temp_residence",
-        "cibi_spouse", "cibi_spouse_office",
+    "cibi_place_of_work", "cibi_temp_residence", "cibi_date",
+    "cibi_spouse", "cibi_spouse_office",
         "cibi_personal_assets", "cibi_business_assets",
         "cibi_business_inventory",
     }
