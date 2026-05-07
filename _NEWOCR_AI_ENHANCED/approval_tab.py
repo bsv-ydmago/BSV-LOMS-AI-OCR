@@ -219,7 +219,10 @@ def _build_approval_panel(self, parent):
     tbl_card = tk.Frame(tbl_wrap, bg=WHITE)
     tbl_card.pack(fill="both", expand=True)
 
-    # Header
+    # Header — spacer is added inside _build_header_row (not here) because
+    # that function destroys all children before rebuilding on every sort.
+    _SCROLLBAR_W = 8   # must match vsb width below
+    self._approval_scrollbar_w = _SCROLLBAR_W  # read by _build_header_row
     self._approval_hdr_row = tk.Frame(tbl_card, bg=NAVY_DEEP, height=40)
     self._approval_hdr_row.pack(fill="x")
     self._approval_hdr_row.pack_propagate(False)
@@ -230,7 +233,8 @@ def _build_approval_panel(self, parent):
     body_outer.pack(fill="both", expand=True)
 
     vsb = tk.Scrollbar(body_outer, orient="vertical", relief="flat",
-                       troughcolor=OFF_WHITE, bg=BORDER_LIGHT, width=8, bd=0)
+                       troughcolor=OFF_WHITE, bg=BORDER_LIGHT,
+                       width=_SCROLLBAR_W, bd=0)
     vsb.pack(side="right", fill="y")
 
     self._approval_canvas = tk.Canvas(body_outer, bg=WHITE,
@@ -335,6 +339,14 @@ def _build_header_row(self):
 
         tk.Frame(self._approval_hdr_row, bg="#1E3A5F", width=1).pack(
             side="left", fill="y", pady=8)
+
+    # Right-side spacer equal to the scrollbar width so every header column
+    # stays pixel-perfectly aligned with its body column beneath it.
+    # This is placed at the END (after all side="left" columns) so it
+    # occupies exactly the space the scrollbar takes in the body.
+    _sb_w = getattr(self, "_approval_scrollbar_w", 8)
+    tk.Frame(self._approval_hdr_row, bg=NAVY_DEEP,
+             width=_sb_w).pack(side="right", fill="y")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -537,14 +549,21 @@ def _render_page(self):
                         "<Button-1>",
                         lambda e, r=row: _open_review_popup(self, r)
                     )
-                    hover_widgets.append((act_btn, row_bg))
+                    # NOTE: act_btn is intentionally NOT added to hover_widgets.
+                    # Adding it caused the row-hover logic to overwrite the button's
+                    # NAVY_LIGHT background with the row highlight colour on enter,
+                    # and then restore it to row_bg (white) on leave — making the
+                    # button appear to vanish. The button manages its own bg via
+                    # _on_enter_btn / _on_leave_btn independently.
                 else:
                     # Non-pending rows show a dim "—" instead
-                    tk.Label(
+                    dash_lbl = tk.Label(
                         btn_frame, text="—",
                         font=_F(self, 9),
                         fg=TXT_MUTED, bg=row_bg
-                    ).pack()
+                    )
+                    dash_lbl.pack()
+                    hover_widgets.append((dash_lbl, row_bg))
 
             elif col_key == "status":
                 bbg, bfg = _status_color(row.get("status", ""))
@@ -598,6 +617,20 @@ def _render_page(self):
             w.bind("<Enter>", _enter)
             w.bind("<Leave>", _leave)
 
+        # Propagate mouse-wheel from every child widget up to the canvas.
+        # Tkinter doesn't bubble events automatically, so without this the
+        # scroll only works when the cursor is over the canvas background —
+        # not over any label, button or frame inside a row.
+        def _row_scroll(e, cvs=self._approval_canvas):
+            cvs.yview_scroll(int(-1 * (e.delta / 120)), "units")
+
+        rf.bind("<MouseWheel>", _row_scroll)
+        for w, _ in hover_widgets:
+            try:
+                w.bind("<MouseWheel>", _row_scroll)
+            except Exception:
+                pass
+
     self._approval_canvas.yview_moveto(0)
     self._approval_canvas.after(
         30, lambda: self._approval_canvas.configure(
@@ -614,7 +647,7 @@ def _open_review_popup(self, row: dict):
     popup = tk.Toplevel(self)
     popup.title("Review Edit Request")
     popup.configure(bg="#F4F6F8")
-    popup.resizable(False, False)
+    popup.resizable(False, True)
     popup.grab_set()
 
     PW, PH = 800, 640
@@ -629,8 +662,15 @@ def _open_review_popup(self, row: dict):
                   highlightthickness=2)
     root_frame.pack(fill="both", expand=True)
 
-    main_canvas = tk.Canvas(root_frame, bg="#F4F6F8", highlightthickness=0)
-    main_canvas.pack(fill="both", expand=True)
+    scroll_area = tk.Frame(root_frame, bg="#F4F6F8")
+    scroll_area.pack(fill="both", expand=True)
+    popup_vsb = tk.Scrollbar(scroll_area, orient="vertical", relief="flat",
+                             troughcolor="#E2EAF4", bg="#C8D8EC", width=8, bd=0)
+    popup_vsb.pack(side="right", fill="y")
+    main_canvas = tk.Canvas(scroll_area, bg="#F4F6F8", highlightthickness=0,
+                            yscrollcommand=popup_vsb.set)
+    main_canvas.pack(side="left", fill="both", expand=True)
+    popup_vsb.config(command=main_canvas.yview)
 
     scroll_frame = tk.Frame(main_canvas, bg="#F4F6F8")
     _sc_win = main_canvas.create_window((0, 0), window=scroll_frame, anchor="nw")
@@ -642,6 +682,12 @@ def _open_review_popup(self, row: dict):
 
     scroll_frame.bind("<Configure>", _on_frame_configure)
     main_canvas.bind("<Configure>", _on_canvas_configure)
+
+    def _popup_scroll(e):
+        main_canvas.yview_scroll(int(-1 * (e.delta / 120)), "units")
+    main_canvas.bind("<MouseWheel>", _popup_scroll)
+    scroll_frame.bind("<MouseWheel>", _popup_scroll)
+    popup.bind("<MouseWheel>", _popup_scroll)
 
     # ── Header strip ──────────────────────────────────────────────────
     hdr = tk.Frame(scroll_frame, bg="#F4F6F8")
@@ -692,11 +738,11 @@ def _open_review_popup(self, row: dict):
     info_card.pack(fill="x", padx=20)
 
     _info = [
-        ("👤  Requested By", row.get("requested_by", "—")),
-        ("🏷️  Applicant",    row.get("record_type",  "—")),
-        ("🔢  Applicant ID", row.get("record_id",    "—")),
-        ("📋  Field",        row.get("field_name",   "—")),
-        ("💬  Reason",       row.get("reason",       "—")),
+        ("👤 Requested By", row.get("requested_by", "—")),
+        ("🏷️ Applicant",   row.get("record_type",  "—")),
+        ("🔢 Applicant ID", row.get("record_id",    "—")),
+        ("📋 Field",        row.get("field_name",   "—")),
+        ("💬 Reason",       row.get("reason",       "—")),
     ]
 
     for idx, (label, value) in enumerate(_info):
@@ -711,7 +757,7 @@ def _open_review_popup(self, row: dict):
 
         tk.Label(rf, text=label, font=_F(self, 8, "bold"),
                 fg="#2E5C8A", bg=row_bg,
-                width=16, anchor="w", padx=14, pady=8).pack(side="left")
+                width=16, anchor="w", padx=8, pady=8).pack(side="left")
         tk.Label(rf, text=str(value), font=_F(self, 9),
                 fg="#0B1F3A", bg=row_bg, anchor="w",
                 wraplength=340, justify="left").pack(
@@ -855,6 +901,17 @@ def _open_review_popup(self, row: dict):
         _rebuild_buttons()
 
     def _rebuild_buttons():
+        # Cancel on far left; Reject + Approve grouped on far right
+        ctk.CTkButton(
+            btn_row, text="Cancel",
+            command=popup.destroy,
+            height=36, corner_radius=7,
+            fg_color="#DDE6F0", hover_color="#C8D8EC",
+            text_color="#1A2E42", font=_F(self, 9),
+            border_width=1, border_color="#B0C4D8"
+        ).pack(side="left")
+
+        # Pack right-side buttons in reverse order (last packed = far right)
         ab = ctk.CTkButton(
             btn_row, text="✔  Approve",
             command=_do_approve,
@@ -863,7 +920,7 @@ def _open_review_popup(self, row: dict):
             text_color=WHITE, font=_F(self, 10, "bold"),
             border_width=0
         )
-        ab.pack(side="left", padx=(0, 8))
+        ab.pack(side="right")
         approve_btn_ref[0] = ab
 
         rb = ctk.CTkButton(
@@ -874,17 +931,8 @@ def _open_review_popup(self, row: dict):
             text_color=WHITE, font=_F(self, 10, "bold"),
             border_width=0
         )
-        rb.pack(side="left", padx=(0, 8))
+        rb.pack(side="right", padx=(0, 8))
         reject_btn_ref[0] = rb
-
-        ctk.CTkButton(
-        btn_row, text="Cancel",
-        command=popup.destroy,
-        height=36, corner_radius=7,
-        fg_color="#DDE6F0", hover_color="#C8D8EC",
-        text_color="#1A2E42", font=_F(self, 9),
-        border_width=1, border_color="#B0C4D8"
-    ).pack(side="right")
 
     _rebuild_buttons()
 

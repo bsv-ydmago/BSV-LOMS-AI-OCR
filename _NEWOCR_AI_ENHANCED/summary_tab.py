@@ -5423,7 +5423,7 @@ def _validate_clients(self):
                 db_cid_set.add(db_cid_up)
 
                 if db_cid_up not in ref_map:
-                    unmatched.append((db_cid, db_name, "Client ID not in reference"))
+                    unmatched.append((db_cid, db_name, "Client ID not in Loan Listing"))
                     continue
 
                 ref_name = ref_map[db_cid_up]
@@ -5538,8 +5538,8 @@ def _validate_clients(self):
             # ── Sheet 1: Summary ───────────────────────────────────────
             ws1 = wb_out.active
             ws1.title = "Summary"
-            ws1.column_dimensions["A"].width = 38
-            ws1.column_dimensions["B"].width = 18
+            ws1.column_dimensions["A"].width = 43
+            ws1.column_dimensions["B"].width = 15
 
             ws1.cell(row=1, column=1,
                      value="Validation Report — Summary").font = \
@@ -5567,13 +5567,13 @@ def _validate_clients(self):
             ws1.row_dimensions[3].height = 22
 
             for ri, (label, count, fill) in enumerate([
-                ("Total Records in DB",                  total_db,     fill_section),
-                ("✓  Matched (ID + Name correct)",        n_matched,    fill_match),
-                ("✗  Unmatched (ID or Name mismatch)",    n_unmatched,  fill_unmatch),
-                ("⚠  No Client ID in DB (unvalidatable)", n_no_cid,     fill_nocid),
-                ("—  In Reference but not in DB",         n_notindb,    fill_notindb),
-                ("⚠  Records with missing column data",   n_miss_rows,  fill_missing),
-                ("Total Unique Entries in Reference",     len(ref_map), fill_section),
+                ("👤 Total Records in DB",                                total_db,     fill_section),
+                ("✓  Matched Records (ID + Name Correct)",             n_matched,    fill_match),
+                ("✗  Unmatched Records (ID or Name Mismatch)",         n_unmatched,  fill_unmatch),
+                ("⚠  Missing in LL (Client Missing in Loan Listing)",  n_no_cid,     fill_nocid),
+                ("⚠  Missing in DB (No CIBI in Database)",             n_notindb,    fill_notindb),
+                ("⚠  Missing Info (Clients with Incomplete Data)",     n_miss_rows,  fill_missing),
+                ("👤 Total Unique Clients in Loan Listing",               len(ref_map), fill_section),
             ], 4):
                 _bc(ws1, ri, 1, label, fill, bold_f, left_c)
                 _bc(ws1, ri, 2, count, fill, bold_f, ctr_al)
@@ -5589,14 +5589,14 @@ def _validate_clients(self):
             ws1.row_dimensions[rate_row].height = 22
             ws1.freeze_panes = "A4"
 
-            # ── Sheet 2: Unmatched & Not in DB ─────────────────────────
-            ws2 = wb_out.create_sheet("Unmatched & Not In DB")
+            # ── Sheet 2: Unmatched ─────────────────────────────────────
+            ws2 = wb_out.create_sheet("Unmatched Records")
             ws2.column_dimensions["A"].width = 18
             ws2.column_dimensions["B"].width = 30
             ws2.column_dimensions["C"].width = 38
             ws2.column_dimensions["D"].width = 16
             _hc(ws2, 1, 1, "Client ID",     fill_hdr_red)
-            _hc(ws2, 1, 2, "Applicant",     fill_hdr_red)
+            _hc(ws2, 1, 2, "Client Name",   fill_hdr_red)
             _hc(ws2, 1, 3, "Reason / Note", fill_hdr_red)
             _hc(ws2, 1, 4, "Issue Type",    fill_hdr_red)
             ws2.row_dimensions[1].height = 24
@@ -5604,13 +5604,9 @@ def _validate_clients(self):
             ri = 2
 
             # ── SECTION A: DB records unmatched ────────────────────────
-            _section_label(ws2, ri,
-                "SECTION A — DB Records: Unmatched (Client ID or Name mismatch)",
-                PatternFill("solid", fgColor="FFE8E8"), "9B2226", 4)
-            ri += 1
             if unmatched:
                 for db_cid, db_name, reason in unmatched:
-                    issue = "Name Mismatch" if "mismatch" in reason.lower() else "ID Not in Ref"
+                    issue = "Name Mismatch" if "mismatch" in reason.lower() else "ID Not in LL"
                     _bc(ws2, ri, 1, db_cid,  fill_unmatch, bold_f)
                     _bc(ws2, ri, 2, db_name, fill_unmatch)
                     _bc(ws2, ri, 3, reason,  fill_unmatch)
@@ -5623,55 +5619,38 @@ def _validate_clients(self):
                 c.fill = fill_unmatch; c.alignment = wrap_al
                 ws2.merge_cells(start_row=ri, start_column=1, end_row=ri, end_column=4)
                 ws2.row_dimensions[ri].height = 18
-                ri += 1
-
-            # ── SECTION A2: DB records with no client ID ───────────────
-            ri += 1  # blank spacer row
-            _section_label(ws2, ri,
-                "SECTION A2 — DB Records with No Client ID (cannot be validated)",
-                PatternFill("solid", fgColor="FFF3CD"), "7D5A00", 4)
-            ri += 1
-            if no_cid:
-                for raw_cid, name in no_cid:
-                    _bc(ws2, ri, 1, raw_cid or "(empty)",      fill_nocid, bold_f)
-                    _bc(ws2, ri, 2, name,                       fill_nocid)
-                    _bc(ws2, ri, 3, "Missing Client ID in DB",  fill_nocid)
-                    _bc(ws2, ri, 4, "No ID",                    fill_nocid, bold_f, ctr_al)
-                    ws2.row_dimensions[ri].height = 18
-                    ri += 1
-            else:
-                c = ws2.cell(row=ri, column=1, value="✓  All DB records have a Client ID.")
-                c.font = Font(name="Segoe UI", bold=True, size=9, color="1F6B28")
-                c.fill = fill_nocid; c.alignment = wrap_al
-                ws2.merge_cells(start_row=ri, start_column=1, end_row=ri, end_column=4)
-                ws2.row_dimensions[ri].height = 18
-                ri += 1
-
-            # ── SECTION B: Reference entries NOT found in DB ───────────
-            # This is the key section — shows EVERY reference client whose
-            # client_id does not exist anywhere in the DB table.
-            ri += 1  # blank spacer row
-            _section_label(ws2, ri,
-                f"SECTION B — Reference Entries with NO Matching Client ID in DB  ({len(ref_not_in_db):,} records)",
-                PatternFill("solid", fgColor="E8F0FF"), "1A3A5C", 4)
-            ri += 1
-            if ref_not_in_db:
-                for ref_cid, ref_name in ref_not_in_db:
-                    _bc(ws2, ri, 1, ref_cid,                         fill_notindb, bold_f)
-                    _bc(ws2, ri, 2, ref_name,                         fill_notindb)
-                    _bc(ws2, ri, 3, "Client ID not found in DB",      fill_notindb)
-                    _bc(ws2, ri, 4, "Not in DB",                      fill_notindb, bold_f, ctr_al)
-                    ws2.row_dimensions[ri].height = 18
-                    ri += 1
-            else:
-                c = ws2.cell(row=ri, column=1,
-                             value="✓  All reference entries exist in the DB.")
-                c.font = Font(name="Segoe UI", bold=True, size=9, color="1F6B28")
-                c.fill = fill_notindb; c.alignment = wrap_al
-                ws2.merge_cells(start_row=ri, start_column=1, end_row=ri, end_column=4)
-                ws2.row_dimensions[ri].height = 18
 
             ws2.freeze_panes = "A2"
+
+            # ── Sheet 3 (new): No Client ID ────────────────────────────
+            ws_nocid = wb_out.create_sheet("Missing in LL")
+            ws_nocid.column_dimensions["A"].width = 22
+            ws_nocid.column_dimensions["B"].width = 38
+            ws_nocid.column_dimensions["C"].width = 25
+            _hc(ws_nocid, 1, 1, "Client ID",     fill_hdr_gray)
+            _hc(ws_nocid, 1, 2, "Client Name",   fill_hdr_gray)
+            _hc(ws_nocid, 1, 3, "Status",        fill_hdr_gray)
+            ws_nocid.row_dimensions[1].height = 24
+
+            ri_nocid = 2
+            if no_cid:
+                for raw_cid, name in no_cid:
+                    _bc(ws_nocid, ri_nocid, 1, raw_cid or "(empty)",    fill_nocid, bold_f)
+                    _bc(ws_nocid, ri_nocid, 2, name,                    fill_nocid)
+                    _bc(ws_nocid, ri_nocid, 3, "Not in Loan Listing",   fill_nocid, bold_f, ctr_al)
+                    ws_nocid.row_dimensions[ri_nocid].height = 18
+                    ri_nocid += 1
+            else:
+                c = ws_nocid.cell(row=ri_nocid, column=1,
+                                value="✓  All DB records have a Client ID.")
+                c.font = Font(name="Segoe UI", bold=True, size=9, color="1F6B28")
+                c.fill = fill_nocid; 
+                c.alignment = wrap_al
+                ws_nocid.merge_cells(start_row=ri_nocid, start_column=1,
+                                    end_row=ri_nocid, end_column=4)
+                ws_nocid.row_dimensions[ri_nocid].height = 18
+
+            ws_nocid.freeze_panes = "A2"
 
             # ── Sheet 3: Missing Info ───────────────────────────────────
             ws3 = wb_out.create_sheet("Missing Info")
@@ -5679,8 +5658,8 @@ def _validate_clients(self):
             ws3.column_dimensions["B"].width = 30
             ws3.column_dimensions["C"].width = 16
             ws3.column_dimensions["D"].width = 55
-            _hc(ws3, 1, 1, "Client ID",      fill_hdr_red)
-            _hc(ws3, 1, 2, "Applicant",       fill_hdr_red)
+            _hc(ws3, 1, 1, "Client ID",       fill_hdr_red)
+            _hc(ws3, 1, 2, "Client Name",     fill_hdr_red)
             _hc(ws3, 1, 3, "Missing Count",   fill_hdr_red)
             _hc(ws3, 1, 4, "Missing Columns", fill_hdr_red)
             ws3.row_dimensions[1].height = 24
@@ -5706,18 +5685,18 @@ def _validate_clients(self):
                 ws3.row_dimensions[2].height = 22
             ws3.freeze_panes = "A2"
 
-            # ── Sheet 4: Matched Comparison ─────────────────────────────
-            ws4 = wb_out.create_sheet("Matched Comparison")
+            # ── Sheet 4: Matched ─────────────────────────────
+            ws4 = wb_out.create_sheet("Matched Records")
             ws4.column_dimensions["A"].width = 20
             ws4.column_dimensions["B"].width = 32
             ws4.column_dimensions["C"].width = 20
             ws4.column_dimensions["D"].width = 32
             ws4.column_dimensions["E"].width = 18
 
-            _hc(ws4, 1, 1, "Client ID (DB)",          fill_hdr_green)
-            _hc(ws4, 1, 2, "Applicant (DB)",           fill_hdr_green)
-            _hc(ws4, 1, 3, "Client ID (Reference)",    fill_hdr_green)
-            _hc(ws4, 1, 4, "Client Name (Reference)",  fill_hdr_green)
+            _hc(ws4, 1, 1, "Client ID (DB)",           fill_hdr_green)
+            _hc(ws4, 1, 2, "Client Name(DB)",          fill_hdr_green)
+            _hc(ws4, 1, 3, "Client ID (LL)",           fill_hdr_green)
+            _hc(ws4, 1, 4, "Client Name (LL)",         fill_hdr_green)
             _hc(ws4, 1, 5, "Name Similarity %",        fill_hdr_green)
             ws4.row_dimensions[1].height = 24
 
@@ -5746,48 +5725,49 @@ def _validate_clients(self):
 
             # ── Sheet 5: Reference Not In DB (dedicated full sheet) ─────
             # Standalone sheet so it's never truncated or mixed with other data
-            ws5 = wb_out.create_sheet("Ref Not In DB")
+            ws5 = wb_out.create_sheet("Missing in DB")
             ws5.column_dimensions["A"].width = 22
             ws5.column_dimensions["B"].width = 38
             ws5.column_dimensions["C"].width = 20
 
-            _hc(ws5, 1, 1, "Client ID (Reference)",  fill_hdr_blue)
-            _hc(ws5, 1, 2, "Client Name (Reference)", fill_hdr_blue)
-            _hc(ws5, 1, 3, "Status",                  fill_hdr_blue)
+            _hc(ws5, 1, 1, "Client ID (LL)",   fill_hdr_blue)
+            _hc(ws5, 1, 2, "Client Name (LL)", fill_hdr_blue)
+            _hc(ws5, 1, 3, "Status",           fill_hdr_blue)
             ws5.row_dimensions[1].height = 24
 
-            ws5.cell(row=2, column=1,
-                     value=f"Total: {len(ref_not_in_db):,} reference entries have no matching Client ID in the DB.").font = \
-                Font(name="Segoe UI", bold=True, size=9, color="1A3A5C")
-            ws5.cell(row=2, column=1).alignment = wrap_al
-            ws5.merge_cells("A2:C2")
-            ws5.row_dimensions[2].height = 18
-
             if ref_not_in_db:
-                for ri5, (ref_cid, ref_name) in enumerate(ref_not_in_db, 3):
+                for ri5, (ref_cid, ref_name) in enumerate(ref_not_in_db, 2):
                     _bc(ws5, ri5, 1, ref_cid,              fill_notindb, bold_f)
                     _bc(ws5, ri5, 2, ref_name,              fill_notindb)
-                    _bc(ws5, ri5, 3, "Not in DB",           fill_notindb, bold_f, ctr_al)
+                    _bc(ws5, ri5, 3, "Not in Database",           fill_notindb, bold_f, ctr_al)
                     ws5.row_dimensions[ri5].height = 18
             else:
-                c = ws5.cell(row=3, column=1,
+                c = ws5.cell(row=2, column=1,
                              value="✓  All reference entries exist in the DB.")
                 c.font = Font(name="Segoe UI", bold=True, size=10, color="1F6B28")
                 c.alignment = wrap_al
-                ws5.merge_cells("A3:C3")
-                ws5.row_dimensions[3].height = 22
-            ws5.freeze_panes = "A3"
 
+            ws5.freeze_panes = "A2"
+
+            excel_order = [
+                "Summary",
+                "Matched Records",
+                "Unmatched Records",
+                "Missing in LL",
+                "Missing in DB",
+                "Missing Info",
+            ]
+            wb_out._sheets = [wb_out[name] for name in excel_order]
             wb_out.save(out_path)
 
-            msg  = "Validation complete.\n\n"
-            msg += f"Total DB records           : {total_db:,}\n"
-            msg += f"✓  Matched                 : {n_matched:,}\n"
-            msg += f"✗  Unmatched               : {n_unmatched:,}\n"
-            msg += f"⚠  No Client ID in DB      : {n_no_cid:,}\n"
-            msg += f"—  In Ref, not in DB       : {n_notindb:,}\n"
-            msg += f"⚠  Missing col info        : {n_miss_rows:,} record(s)\n"
-            msg += f"Match Rate                 : {rate}\n\n"
+            msg  = "Validation Complete.\n\n"
+            msg += f"👤 Total DB records            : {total_db:,}\n"
+            msg += f" ✓   Matched Records          : {n_matched:,}\n"
+            msg += f" ✗   Unmatched Records      : {n_unmatched:,}\n"
+            msg += f"⚠  Missing in Loan Listing  : {n_no_cid:,}\n"
+            msg += f"⚠  Missing in Database      : {n_notindb:,}\n"
+            msg += f"⚠  Missing Column Info     : {n_miss_rows:,} record(s)\n"
+            msg += f"🎯  Match Rate                   : {rate}\n\n"
             msg += f"Report saved to:\n{out_path}"
 
             self.after(0, lambda: (

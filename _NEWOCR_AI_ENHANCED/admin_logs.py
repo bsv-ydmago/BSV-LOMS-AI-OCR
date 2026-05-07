@@ -113,7 +113,7 @@ def _build_logs_panel(self, parent):
         fg_color=LIME_DARK, hover_color=_SB_ACCENT,
         text_color=WHITE, font=_F(self, 9, "bold"),
         border_width=0
-    ).pack(side="right", padx=(0, 8))
+    ).pack(side="right", padx=(8, 8))
 
     ctk.CTkButton(
         right_hdr, text="↻  Refresh",
