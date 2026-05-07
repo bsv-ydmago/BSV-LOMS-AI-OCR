@@ -397,7 +397,6 @@ def _build_left(self, p):
     for tab_key, icon, label, badge in _NAV_ITEMS:
         if tab_key in _allowed and tab_key not in _HIDDEN_TABS:
             _build_nav_pill(self, nav_container, tab_key, icon, label, badge)
-
     # Only show the second group + divider if the user can see any of those tabs
     _nav2_visible = [x for x in _NAV_ITEMS_2 if x[0] in _allowed]
     if _nav2_visible:
@@ -586,84 +585,13 @@ def _build_right(self, p):
     )
     self._page_title_lbl.pack(side="left", anchor="center")
 
-    status_pill = tk.Frame(hdr, bg=LIME_MIST,
-                           highlightbackground=LIME_MID, highlightthickness=1)
-    status_pill.pack(side="left", padx=(14, 0), pady=18)
+    # Hidden status label kept for compatibility with existing update calls.
+    # (Previously a visible "● Ready" pill in the header.)
     self._status_lbl = tk.Label(
-        status_pill, text="●  Ready",
+        hdr, text="",
         font=F(8, "bold"), fg=LIME_DARK,
-        bg=LIME_MIST, padx=12, pady=4
+        bg=_HDR_BG, padx=0, pady=0
     )
-    self._status_lbl.pack()
-
-    self._copy_btn = ctk.CTkButton(
-        hdr, text="⎘  Copy", command=self._copy,
-        width=100, height=32, corner_radius=6,
-        fg_color=NAVY_MIST, hover_color=NAVY_GHOST, text_color=NAVY_MID,
-        font=FF(9, "bold"),
-        border_width=1, border_color=BORDER_MID
-    )
-    self._copy_btn.pack(side="right", padx=(0, 20))
-
-    # ── Pipeline caption ──────────────────────────────────────────────
-    pipe_row = tk.Frame(page, bg=_PAGE_BG)
-    pipe_row.pack(fill="x", padx=24, pady=(8, 0))
-    tk.Label(
-        pipe_row,
-        text="Pipeline:  PaddleOCR  →  Gemini 2.5 Flash VLM  →  Confidence Scoring  →  CIBI Credit Analysis",
-        font=F(8), fg=TXT_MUTED, bg=_PAGE_BG
-    ).pack(anchor="w")
-
-    # ── Search bar ────────────────────────────────────────────────────
-    search_row = tk.Frame(page, bg=_PAGE_BG)
-    search_row.pack(fill="x", padx=24, pady=(6, 8))
-
-    search_wrap = tk.Frame(search_row, bg=WHITE,
-                           highlightbackground=BORDER_MID,
-                           highlightthickness=1)
-    search_wrap.pack(side="left", fill="x", expand=True)
-
-    tk.Label(search_wrap, text="🔍", font=("Segoe UI Emoji", 10),
-             bg=WHITE, fg=NAVY_PALE).pack(side="left", padx=(10, 2))
-
-    self._search_var   = tk.StringVar()
-    self._search_entry = tk.Entry(
-        search_wrap, textvariable=self._search_var,
-        font=F(10), fg=TXT_NAVY, bg=WHITE,
-        relief="flat", bd=0, insertbackground=NAVY_MID, width=28
-    )
-    self._search_entry.pack(side="left", fill="x", expand=True, pady=6)
-    self._search_entry.bind("<Return>",   lambda e: self._do_search())
-    self._search_entry.bind("<KP_Enter>", lambda e: self._do_search())
-    self._search_entry.bind("<Escape>",   lambda e: self._clear_search())
-    self._search_var.trace_add("write",   lambda *a: self._do_search())
-
-    self._match_lbl = tk.Label(search_wrap, text="",
-                               font=F(8), fg=TXT_SOFT, bg=WHITE, padx=8)
-    self._match_lbl.pack(side="left")
-
-    nav_frame = tk.Frame(search_row, bg=_PAGE_BG)
-    nav_frame.pack(side="left", padx=(6, 0))
-
-    for symbol, cmd in [("▲", self._search_prev), ("▼", self._search_next)]:
-        ctk.CTkButton(
-            nav_frame, text=symbol, width=30, height=30, corner_radius=6,
-            fg_color=WHITE, hover_color=NAVY_MIST, text_color=NAVY_MID,
-            font=FF(9, "bold"),
-            border_width=1, border_color=BORDER_MID,
-            command=cmd
-        ).pack(side="left", padx=(0, 4))
-
-    ctk.CTkButton(
-        nav_frame, text="✕", width=30, height=30, corner_radius=6,
-        fg_color=WHITE, hover_color="#FFE8E8", text_color=ACCENT_RED,
-        font=FF(9, "bold"),
-        border_width=1, border_color=BORDER_MID,
-        command=self._clear_search
-    ).pack(side="left")
-
-    self._prev_btn = nav_frame.winfo_children()[0]
-    self._next_btn = nav_frame.winfo_children()[1]
 
     # ── Content card ──────────────────────────────────────────────────
     card_outer = tk.Frame(page, bg=_HDR_BORDER, padx=1, pady=1)
@@ -914,8 +842,6 @@ def _build_extract_toolbar(self, parent):
 def _configure_analysis_tags(self, box):
     sz = 11
     ff = FMONO(11)[0]
-    box.tag_configure("search_match",    background=LIME_PALE,    foreground=TXT_NAVY)
-    box.tag_configure("search_current",  background=LIME_BRIGHT,  foreground=NAVY_DEEP)
     box.tag_configure("sec_header",      font=(ff, sz+2, "bold"), foreground=NAVY_DEEP,
                       spacing1=18, spacing3=6,  lmargin1=0,  lmargin2=0)
     box.tag_configure("sub_header",      font=(ff, sz,   "bold"), foreground=NAVY_MID,
@@ -946,8 +872,6 @@ def _write(self, txt, color=TXT_NAVY):
     box.delete("1.0", "end")
     box.insert("end", txt)
     box.config(state="disabled")
-    if self._search_var.get().strip() and self._current_tab == "extract":
-        self._do_search()
 
 def _write_analysis(self, txt, color=TXT_NAVY):
     box = self._analysis_box
@@ -994,8 +918,6 @@ def _write_analysis(self, txt, color=TXT_NAVY):
             self._insert_with_peso(box, s + "\n", "body")
 
     box.config(state="disabled")
-    if self._search_var.get().strip() and self._current_tab == "analysis":
-        self._do_search()
 
 def _insert_with_peso(self, box, text, base_tag):
     for part in re.split(r'(₱[\d,]+(?:\.\d+)?)', text):
@@ -1098,9 +1020,6 @@ def _switch_tab(self, tab):
     else:
         # Default/fallback: return to CIBI Mode if an unknown tab key is requested.
         self._cibi_output_frame.pack(fill="both", expand=True)
-
-    if self._search_var.get().strip() and tab in ("extract", "analysis"):
-        self._do_search()
 
 
 
@@ -1238,91 +1157,6 @@ def _file_icon_for(self, name):
     return "📃"
 
 
-# ─────────────────────────────────────────────────────────────────────
-#  SEARCH
-# ─────────────────────────────────────────────────────────────────────
-def _active_textbox(self):
-    return self._textbox if self._current_tab == "extract" else self._analysis_box
-
-def _do_search(self, *_):
-    if self._current_tab not in ("extract", "analysis"):
-        return
-    query = self._search_var.get().strip()
-    box   = self._active_textbox()
-    box.tag_remove("search_match",   "1.0", "end")
-    box.tag_remove("search_current", "1.0", "end")
-    self._search_matches = []
-    self._search_cursor  = -1
-    if not query:
-        self._match_lbl.config(text="", fg=TXT_SOFT)
-        return
-    start = "1.0"
-    while True:
-        pos = box.search(query, start, stopindex="end", nocase=True)
-        if not pos: break
-        end = f"{pos}+{len(query)}c"
-        self._search_matches.append((pos, end))
-        box.tag_add("search_match", pos, end)
-        start = end
-    count = len(self._search_matches)
-    if count == 0:
-        self._match_lbl.config(text="No results", fg=ACCENT_RED)
-        return
-    self._search_cursor = 0
-    self._highlight_current()
-    self._match_lbl.config(text=f"1 / {count}", fg=LIME_DARK)
-
-def _highlight_current(self):
-    if not self._search_matches: return
-    box = self._active_textbox()
-    box.tag_remove("search_current", "1.0", "end")
-    pos, end = self._search_matches[self._search_cursor]
-    box.tag_add("search_current", pos, end)
-    box.see(pos)
-    self._match_lbl.config(
-        text=f"{self._search_cursor + 1} / {len(self._search_matches)}",
-        fg=LIME_DARK
-    )
-
-def _search_next(self):
-    if not self._search_matches: return
-    self._search_cursor = (self._search_cursor + 1) % len(self._search_matches)
-    self._highlight_current()
-
-def _search_prev(self):
-    if not self._search_matches: return
-    self._search_cursor = (self._search_cursor - 1) % len(self._search_matches)
-    self._highlight_current()
-
-def _clear_search(self):
-    self._search_var.set("")
-    if self._current_tab in ("extract", "analysis"):
-        box = self._active_textbox()
-        box.tag_remove("search_match",   "1.0", "end")
-        box.tag_remove("search_current", "1.0", "end")
-    self._search_matches = []
-    self._search_cursor  = -1
-    self._match_lbl.config(text="", fg=TXT_SOFT)
-    self._search_entry.focus_set()
-
-
-# ─────────────────────────────────────────────────────────────────────
-#  COPY
-# ─────────────────────────────────────────────────────────────────────
-def _copy(self):
-    if self._current_tab == "dashboard":
-        return
-    if self._current_tab == "extract":
-        content = self._textbox.get("1.0", "end").strip()
-    else:
-        content = self._analysis_box.get("1.0", "end").strip()
-    skip = ("Results will appear here", "Loan analysis will appear here")
-    if content and not any(s in content for s in skip):
-        self.clipboard_clear()
-        self.clipboard_append(content)
-        self._copy_btn.configure(text="✓  Copied!")
-        self.after(2200, lambda: self._copy_btn.configure(text="⎘  Copy"))
-
 def _confirm_close(self):
     import tkinter.messagebox as mb
     confirmed = mb.askyesno(
@@ -1400,16 +1234,6 @@ def attach(cls):
     cls._sidebar_sec             = _sidebar_sec
     cls._file_icon_for           = _file_icon_for
 
-    # Search
-    cls._active_textbox          = _active_textbox
-    cls._do_search               = _do_search
-    cls._highlight_current       = _highlight_current
-    cls._search_next             = _search_next
-    cls._search_prev             = _search_prev
-    cls._clear_search            = _clear_search
-
-    # Copy
-    cls._copy                    = _copy
     # Close confirmation
     cls._confirm_close           = _confirm_close
 
