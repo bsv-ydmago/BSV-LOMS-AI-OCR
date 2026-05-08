@@ -116,6 +116,15 @@ def _build_approval_panel(self, parent):
         border_width=0
     ).pack(side="right")
 
+    ctk.CTkButton(
+        right_hdr, text="✔✔  Approve All",
+        command=lambda: _approve_all(self),
+        width=130, height=32, corner_radius=6,
+        fg_color=ACCENT_SUCCESS, hover_color=LIME_DARK,
+        text_color=WHITE, font=_F(self, 9, "bold"),
+        border_width=0
+    ).pack(side="right", padx=(0, 8))
+
     # ── STATS CARDS ───────────────────────────────────────────────────
     stats_row = tk.Frame(frame, bg=BG)
     stats_row.pack(fill="x", padx=28, pady=(16, 0))
@@ -353,7 +362,8 @@ def _build_header_row(self):
 #  DATA LOADING
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _load_approvals(self):
+def _load_approvals(self, preserve_page=False):
+    _saved_page = self._approval_page if preserve_page else 0
     _set_status(self, "Loading…", ACCENT_GOLD)
     try:
         conn = self.get_conn()
@@ -398,8 +408,10 @@ def _load_approvals(self):
     self._approval_stat_lbls["rejected"].config(text=f"{rejected:,}")
     self._approval_count_lbl.config(text=f"{total:,} records")
 
-    self._approval_page = 0
-    _apply_filter(self)
+    # Restore the saved page (clamped so it stays in valid range after data changes)
+    total_pages = max(1, (len(self._approval_all_rows) + _PAGE_SIZE - 1) // _PAGE_SIZE)
+    self._approval_page = min(_saved_page, total_pages - 1)
+    _apply_filter(self, reset_page=False)
     _set_status(self, f"✔  Loaded {total:,} rows", ACCENT_SUCCESS)
 
 
@@ -418,7 +430,7 @@ def _fmt_time(val):
 #  FILTER & SORT
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _apply_filter(self):
+def _apply_filter(self, reset_page=True):
     raw   = self._approval_search_var.get().strip().lower()
     query = "" if "search by" in raw else raw
     status_filter = self._approval_status_var.get()
@@ -430,7 +442,8 @@ def _apply_filter(self):
         rows = [r for r in rows if any(query in str(v).lower() for v in r.values())]
 
     self._approval_filtered = list(rows)
-    self._approval_page = 0
+    if reset_page:
+        self._approval_page = 0
     _render_page(self)
 
 
@@ -938,6 +951,217 @@ def _open_review_popup(self, row: dict):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+#  APPROVE ALL
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _approve_all(self):
+    """Two-step confirmation dialog then bulk-approve all pending edit requests."""
+
+    pending_rows = [r for r in self._approval_all_rows if r.get("status") == "pending"]
+    pending_count = len(pending_rows)
+
+    if pending_count == 0:
+        _set_status(self, "✘ No pending requests to approve", ACCENT_RED)
+        return
+
+    # ── Step 1 dialog: Ask ────────────────────────────────────────────────────
+    dlg = tk.Toplevel(self)
+    dlg.title("Approve All")
+    dlg.configure(bg="#F4F6F8")
+    dlg.resizable(False, False)
+    dlg.grab_set()
+
+    DW, DH = 460, 240
+    self.update_idletasks()
+    rx = self.winfo_rootx() + (self.winfo_width()  - DW) // 2
+    ry = self.winfo_rooty() + (self.winfo_height() - DH) // 2
+    dlg.geometry(f"{DW}x{DH}+{rx}+{ry}")
+
+    root_f = tk.Frame(dlg, bg="#F4F6F8",
+                      highlightbackground=_SB_ACCENT, highlightthickness=2)
+    root_f.pack(fill="both", expand=True)
+
+    # Icon + title
+    top_strip = tk.Frame(root_f, bg=ACCENT_SUCCESS, height=4)
+    top_strip.pack(fill="x")
+
+    body_f = tk.Frame(root_f, bg="#F4F6F8")
+    body_f.pack(fill="both", expand=True, padx=28, pady=20)
+
+    icon_row = tk.Frame(body_f, bg="#F4F6F8")
+    icon_row.pack(anchor="w")
+    tk.Label(icon_row, text="✔✔", font=("Segoe UI Emoji", 18),
+             fg=ACCENT_SUCCESS, bg="#F4F6F8").pack(side="left", padx=(0, 10))
+    title_col = tk.Frame(icon_row, bg="#F4F6F8")
+    title_col.pack(side="left")
+    tk.Label(title_col, text="Approve All Pending Requests",
+             font=_F(self, 12, "bold"), fg=NAVY_DEEP, bg="#F4F6F8").pack(anchor="w")
+    tk.Label(title_col,
+             text=f"This will approve {pending_count:,} pending edit request{'s' if pending_count != 1 else ''}.",
+             font=_F(self, 9), fg=TXT_SOFT, bg="#F4F6F8").pack(anchor="w", pady=(2, 0))
+
+    tk.Label(body_f,
+             text="All pending edits will be applied to the database.\nDo you want to continue?",
+             font=_F(self, 9), fg=TXT_NAVY, bg="#F4F6F8",
+             justify="left").pack(anchor="w", pady=(14, 0))
+
+    # Buttons
+    tk.Frame(root_f, bg=BORDER_MID, height=1).pack(fill="x", side="bottom")
+    btn_f = tk.Frame(root_f, bg="#F4F6F8")
+    btn_f.pack(side="bottom", fill="x", padx=20, pady=12)
+
+    def _go_to_confirm():
+        dlg.destroy()
+        _approve_all_confirm(self, pending_rows, pending_count)
+
+    ctk.CTkButton(
+        btn_f, text="Cancel",
+        command=dlg.destroy,
+        height=36, corner_radius=7,
+        fg_color="#DDE6F0", hover_color="#C8D8EC",
+        text_color="#1A2E42", font=_F(self, 9),
+        border_width=1, border_color="#B0C4D8"
+    ).pack(side="left")
+
+    ctk.CTkButton(
+        btn_f, text="Yes, Continue →",
+        command=_go_to_confirm,
+        height=36, corner_radius=7,
+        fg_color=NAVY_LIGHT, hover_color=NAVY_MID,
+        text_color=WHITE, font=_F(self, 10, "bold"),
+        border_width=0
+    ).pack(side="right")
+
+
+def _approve_all_confirm(self, pending_rows: list, pending_count: int):
+    """Step 2 — final confirmation before bulk approval."""
+
+    dlg2 = tk.Toplevel(self)
+    dlg2.title("Confirm Approve All")
+    dlg2.configure(bg="#F4F6F8")
+    dlg2.resizable(False, False)
+    dlg2.grab_set()
+
+    DW, DH = 460, 260
+    self.update_idletasks()
+    rx = self.winfo_rootx() + (self.winfo_width()  - DW) // 2
+    ry = self.winfo_rooty() + (self.winfo_height() - DH) // 2
+    dlg2.geometry(f"{DW}x{DH}+{rx}+{ry}")
+
+    root_f = tk.Frame(dlg2, bg="#F4F6F8",
+                      highlightbackground=ACCENT_RED, highlightthickness=2)
+    root_f.pack(fill="both", expand=True)
+
+    top_strip = tk.Frame(root_f, bg=ACCENT_RED, height=4)
+    top_strip.pack(fill="x")
+
+    body_f = tk.Frame(root_f, bg="#F4F6F8")
+    body_f.pack(fill="both", expand=True, padx=28, pady=20)
+
+    icon_row = tk.Frame(body_f, bg="#F4F6F8")
+    icon_row.pack(anchor="w")
+    tk.Label(icon_row, text="⚠️", font=("Segoe UI Emoji", 18),
+             bg="#F4F6F8").pack(side="left", padx=(0, 10))
+    title_col = tk.Frame(icon_row, bg="#F4F6F8")
+    title_col.pack(side="left")
+    tk.Label(title_col, text="Final Confirmation",
+             font=_F(self, 12, "bold"), fg=ACCENT_RED, bg="#F4F6F8").pack(anchor="w")
+    tk.Label(title_col,
+             text=f"You are about to approve {pending_count:,} request{'s' if pending_count != 1 else ''}.",
+             font=_F(self, 9), fg=TXT_SOFT, bg="#F4F6F8").pack(anchor="w", pady=(2, 0))
+
+    tk.Label(body_f,
+             text="This action cannot be undone. All pending edits will be\n"
+                  "permanently written to the applicants table.",
+             font=_F(self, 9), fg=TXT_NAVY, bg="#F4F6F8",
+             justify="left").pack(anchor="w", pady=(14, 0))
+
+    # Buttons
+    tk.Frame(root_f, bg=BORDER_MID, height=1).pack(fill="x", side="bottom")
+    btn_f = tk.Frame(root_f, bg="#F4F6F8")
+    btn_f.pack(side="bottom", fill="x", padx=20, pady=12)
+
+    ctk.CTkButton(
+        btn_f, text="← Cancel",
+        command=dlg2.destroy,
+        height=36, corner_radius=7,
+        fg_color="#DDE6F0", hover_color="#C8D8EC",
+        text_color="#1A2E42", font=_F(self, 9),
+        border_width=1, border_color="#B0C4D8"
+    ).pack(side="left")
+
+    ctk.CTkButton(
+        btn_f, text="✔  Confirm Approve All",
+        command=lambda: _run_approve_all(self, pending_rows, dlg2),
+        height=36, corner_radius=7,
+        fg_color=ACCENT_SUCCESS, hover_color=LIME_DARK,
+        text_color=WHITE, font=_F(self, 10, "bold"),
+        border_width=0
+    ).pack(side="right")
+
+
+def _run_approve_all(self, pending_rows: list, dlg: tk.Toplevel):
+    """Execute the bulk approval — iterates every pending row and applies the edit."""
+    try:
+        conn = self.get_conn()
+        if conn is None:
+            _set_status(self, "✘ No database connection", ACCENT_RED)
+            dlg.destroy()
+            return
+
+        cur = conn.cursor()
+        success_ids = []
+        failed = []
+
+        for row in pending_rows:
+            try:
+                _apply_edit(cur, row)
+                cur.execute(
+                    "UPDATE edit_requests "
+                    "SET status = %s, reviewed_by = %s, reviewed_at = NOW(), rejection_reason = NULL "
+                    "WHERE id = %s",
+                    ("approved", getattr(self, "_current_user_id", None), int(row["id"]))
+                )
+                success_ids.append(row["id"])
+            except Exception as row_err:
+                conn.rollback()
+                failed.append((row["id"], str(row_err)))
+
+        conn.commit()
+        cur.close()
+
+    except Exception as e:
+        _set_status(self, f"✘ DB error: {e}", ACCENT_RED)
+        dlg.destroy()
+        return
+
+    # Log
+    try:
+        from admin_logs import insert_log
+        insert_log(
+            self,
+            "EDIT APPROVE ALL",
+            f"Bulk approved {len(success_ids)} request(s). "
+            + (f"Failed: {len(failed)}" if failed else "All succeeded.")
+        )
+    except Exception:
+        pass
+
+    dlg.destroy()
+
+    if failed:
+        _set_status(self,
+                    f"✔  {len(success_ids)} approved  |  ✘ {len(failed)} failed",
+                    ACCENT_GOLD)
+    else:
+        _set_status(self,
+                    f"✔  All {len(success_ids)} request{'s' if len(success_ids) != 1 else ''} approved",
+                    ACCENT_SUCCESS)
+
+    _load_approvals(self, preserve_page=True)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 #  APPROVE / REJECT PROCESSING
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -1002,8 +1226,8 @@ def _process_request(self, row: dict, decision: str, reason: str, popup: tk.Topl
     action_word = "approved" if decision == "approved" else "rejected"
     _set_status(self, f"✔  Request {row['id']} {action_word}", ACCENT_SUCCESS)
 
-    # Refresh table
-    _load_approvals(self)
+    # Refresh table — stay on the same page the admin was viewing
+    _load_approvals(self, preserve_page=True)
 
 
 def _apply_edit(cur, row: dict):

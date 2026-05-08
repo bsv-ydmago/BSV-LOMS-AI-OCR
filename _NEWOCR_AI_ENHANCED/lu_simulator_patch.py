@@ -3152,6 +3152,7 @@ def _sim_export_client_impact_excel(self):
             "industry": industry,
             "loan_status": str((rec or {}).get("loan_status") or "").strip(),
             "ao_name": str((rec or {}).get("ao_name") or "").strip(),
+            "ci_bi_date": str((rec or {}).get("ci_bi_date") or "").strip(),
             "product_name": str((rec or {}).get("product_name") or "").strip(),
             "loan_balance": float((rec or {}).get("loan_balance") or 0.0),
             "principal_loan": float((rec or {}).get("principal_loan") or 0.0),
@@ -3247,7 +3248,7 @@ def _sim_export_client_impact_excel(self):
 
     # ── Client Impact sheet ───────────────────────────────────────────
     ws = wb.create_sheet("Client Impact")
-    NUM_COLS = 21
+    NUM_COLS = 22
 
     # Row 1 — Title banner
     ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=NUM_COLS)
@@ -3273,7 +3274,7 @@ def _sim_export_client_impact_excel(self):
     # Row 3 — Column headers
     headers = [
         "Client ID", "PN", "Client", "Residence Address", "Office Address",
-        "Industry", "Loan Status", "AO Name", "Product Name",
+        "Industry", "Loan Status", "AO Name", "CI/BI Date", "Product Name",
         "Loan Balance", "Principal Loan",
         "Total Expenses (Base)", "Total Expenses (Sim)",
         "Total Net Income (Base)", "Total Net Income (Sim)",
@@ -3292,7 +3293,7 @@ def _sim_export_client_impact_excel(self):
     ws.row_dimensions[3].height = 32
 
     # Column widths
-    col_widths = [13, 13, 24, 22, 22, 18, 14, 18, 20, 15, 15, 18, 18, 18, 18, 11, 17, 17, 13, 12, 48]
+    col_widths = [13, 13, 24, 22, 22, 18, 14, 15, 15, 20, 15, 15, 18, 18, 18, 18, 11, 17, 17, 13, 12, 48]
     for ci, w in enumerate(col_widths, 1):
         ws.column_dimensions[get_column_letter(ci)].width = w
 
@@ -3336,19 +3337,20 @@ def _sim_export_client_impact_excel(self):
         _wc(6,  r["industry"])
         _wc(7,  r["loan_status"] or "—", align=_al_c)
         _wc(8,  r["ao_name"] or "—")
-        _wc(9,  r["product_name"] or "—")
-        _wc(10, r["loan_balance"],        font=_num_font, align=_al_r, fmt=NUM_FMT)
-        _wc(11, r["principal_loan"],      font=_num_font, align=_al_r, fmt=NUM_FMT)
-        _wc(12, r["base_total_expenses"], font=_num_font, align=_al_r, fmt=NUM_FMT)
-        _wc(13, r["sim_total_expenses"],  font=_num_font, align=_al_r, fmt=NUM_FMT)
-        _wc(14, r["net_income"],          font=_num_font, align=_al_r, fmt=NUM_FMT)
-        _wc(15, r["sim_net_income"],      font=_num_font, align=_al_r, fmt=NUM_FMT)
-        _wc(16, r["pct_increase"],        font=_pct_font, align=_al_c, fmt=PCT_FMT)
-        _wc(17, r["sim_increase"],        font=_num_font, align=_al_r, fmt=NUM_FMT)
-        _wc(18, r["current_amort"],       font=_num_font, align=_al_r, fmt=NUM_FMT)
-        _wc(19, r["pct_net_to_amort"],    font=_pct_font, align=_al_c, fmt=PCT_FMT)
-        _wc(20, r["sim_risk_label"],      font=_risk_font, align=_al_c)
-        _wc(21, r["risk_reasoning"],      align=Alignment(horizontal="left", vertical="center", wrap_text=True))
+        _wc(9,  r["ci_bi_date"] or "—")
+        _wc(10, r["product_name"] or "—")
+        _wc(11, r["loan_balance"],        font=_num_font, align=_al_r, fmt=NUM_FMT)
+        _wc(12, r["principal_loan"],      font=_num_font, align=_al_r, fmt=NUM_FMT)
+        _wc(13, r["base_total_expenses"], font=_num_font, align=_al_r, fmt=NUM_FMT)
+        _wc(14, r["sim_total_expenses"],  font=_num_font, align=_al_r, fmt=NUM_FMT)
+        _wc(15, r["net_income"],          font=_num_font, align=_al_r, fmt=NUM_FMT)
+        _wc(16, r["sim_net_income"],      font=_num_font, align=_al_r, fmt=NUM_FMT)
+        _wc(17, r["pct_increase"],        font=_pct_font, align=_al_c, fmt=PCT_FMT)
+        _wc(18, r["sim_increase"],        font=_num_font, align=_al_r, fmt=NUM_FMT)
+        _wc(19, r["current_amort"],       font=_num_font, align=_al_r, fmt=NUM_FMT)
+        _wc(20, r["pct_net_to_amort"],    font=_pct_font, align=_al_c, fmt=PCT_FMT)
+        _wc(21, r["sim_risk_label"],      font=_risk_font, align=_al_c)
+        _wc(22, r["risk_reasoning"],      align=Alignment(horizontal="left", vertical="center", wrap_text=True))
         ws.row_dimensions[row_num].height = 18
 
     ws.freeze_panes = "A4"
@@ -3549,6 +3551,7 @@ def _sim_merge_excel_files(self):
             "Office Address":           str((rec or {}).get("office_address") or "").strip(),
             "Loan Status":              str((rec or {}).get("loan_status") or "").strip(),
             "AO Name":                  str((rec or {}).get("ao_name") or "").strip(),
+            "CI/BI Date":               str((rec or {}).get("ci_bi_date") or "").strip(),
             "Product Name":             str((rec or {}).get("product_name") or "").strip(),
             "Loan Balance":             _money_str((rec or {}).get("loan_balance")),
             "Principal Loan":           _money_str((rec or {}).get("principal_loan")),
@@ -3644,6 +3647,7 @@ def _sim_merge_excel_files(self):
         "Risk Label",
         "Risk Reasoning",
         "AO Name",
+        "CI/BI Date",
     ]
 
     # Internal impact columns that must be remapped to the priority names above.
@@ -4739,6 +4743,7 @@ def _sim_export_high_risk_clients_excel(self):
             "industry": industry,
             "loan_status": str((rec or {}).get("loan_status") or "").strip(),
             "ao_name": str((rec or {}).get("ao_name") or "").strip(),
+            "ci_bi_date": str((rec or {}).get("ci_bi_date") or "").strip(),
             "product_name": str((rec or {}).get("product_name") or "").strip(),
             "loan_balance": float((rec or {}).get("loan_balance") or 0.0),
             "principal_loan": float((rec or {}).get("principal_loan") or 0.0),
@@ -4823,7 +4828,7 @@ def _sim_export_high_risk_clients_excel(self):
 
     # HIGH Risk Clients sheet.
     ws = wb.create_sheet("HIGH Risk Clients")
-    NUM_COLS = 21
+    NUM_COLS = 22
 
     # ── Shared modern style palette (red/danger theme) ────────────────
     _C_HDR_BG  = "7B1A14"   # deep crimson header
@@ -4871,7 +4876,7 @@ def _sim_export_high_risk_clients_excel(self):
     # Row 3 — Column headers
     headers = [
         "Client ID", "PN", "Client", "Residence Address", "Office Address",
-        "Industry", "Loan Status", "AO Name", "Product Name",
+        "Industry", "Loan Status", "AO Name", "CI/BI Date", "Product Name",
         "Loan Balance", "Principal Loan",
         "Total Expenses (Base)", "Total Expenses (Sim)",
         "Total Net Income (Base)", "Total Net Income (Sim)",
@@ -4890,7 +4895,7 @@ def _sim_export_high_risk_clients_excel(self):
     ws.row_dimensions[3].height = 32
 
     # Column widths
-    col_widths = [13, 13, 24, 22, 22, 18, 14, 18, 20, 15, 15, 18, 18, 18, 18, 11, 17, 17, 13, 12, 48]
+    col_widths = [13, 13, 24, 22, 22, 18, 14, 18, 15, 20, 15, 15, 18, 18, 18, 18, 11, 17, 17, 13, 12, 48]
     for ci, w in enumerate(col_widths, 1):
         ws.column_dimensions[get_column_letter(ci)].width = w
 
@@ -4921,19 +4926,20 @@ def _sim_export_high_risk_clients_excel(self):
         _dc(6,  r["industry"])
         _dc(7,  r["loan_status"] or "—",       align=_al_c)
         _dc(8,  r["ao_name"] or "—")
-        _dc(9,  r["product_name"] or "—")
-        _dc(10, r["loan_balance"],              font=_num_f, align=_al_r, fmt=NUM_FMT)
-        _dc(11, r["principal_loan"],            font=_num_f, align=_al_r, fmt=NUM_FMT)
-        _dc(12, r["base_total_expenses"],       font=_num_f, align=_al_r, fmt=NUM_FMT)
-        _dc(13, r["sim_total_expenses"],        font=_num_f, align=_al_r, fmt=NUM_FMT)
-        _dc(14, r["net_income"],                font=_num_f, align=_al_r, fmt=NUM_FMT)
-        _dc(15, r["sim_net_income"],            font=_num_f, align=_al_r, fmt=NUM_FMT)
-        _dc(16, r["pct_increase"],              font=_base_f, align=_al_c, fmt=PCT_FMT)
-        _dc(17, r["sim_increase"],              font=_num_f, align=_al_r, fmt=NUM_FMT)
-        _dc(18, r["current_amort"],             font=_num_f, align=_al_r, fmt=NUM_FMT)
-        _dc(19, r["pct_net_to_amort"],          font=_base_f, align=_al_c, fmt=PCT_FMT)
-        _dc(20, r["sim_risk_label"],            font=_risk_f, align=_al_c)
-        _dc(21, r["risk_reasoning"],            align=Alignment(horizontal="left", vertical="center", wrap_text=True))
+        _dc(9,  r["ci_bi_date"] or "—")
+        _dc(10, r["product_name"] or "—")
+        _dc(11, r["loan_balance"],              font=_num_f, align=_al_r, fmt=NUM_FMT)
+        _dc(12, r["principal_loan"],            font=_num_f, align=_al_r, fmt=NUM_FMT)
+        _dc(13, r["base_total_expenses"],       font=_num_f, align=_al_r, fmt=NUM_FMT)
+        _dc(14, r["sim_total_expenses"],        font=_num_f, align=_al_r, fmt=NUM_FMT)
+        _dc(15, r["net_income"],                font=_num_f, align=_al_r, fmt=NUM_FMT)
+        _dc(16, r["sim_net_income"],            font=_num_f, align=_al_r, fmt=NUM_FMT)
+        _dc(17, r["pct_increase"],              font=_base_f, align=_al_c, fmt=PCT_FMT)
+        _dc(18, r["sim_increase"],              font=_num_f, align=_al_r, fmt=NUM_FMT)
+        _dc(19, r["current_amort"],             font=_num_f, align=_al_r, fmt=NUM_FMT)
+        _dc(20, r["pct_net_to_amort"],          font=_base_f, align=_al_c, fmt=PCT_FMT)
+        _dc(21, r["sim_risk_label"],            font=_risk_f, align=_al_c)
+        _dc(22, r["risk_reasoning"],            align=Alignment(horizontal="left", vertical="center", wrap_text=True))
         ws.row_dimensions[row_num].height = 18
 
     ws.freeze_panes = "A4"

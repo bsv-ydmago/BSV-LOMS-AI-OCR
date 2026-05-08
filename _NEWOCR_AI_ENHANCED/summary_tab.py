@@ -340,7 +340,27 @@ def _apply_checklist_tree_style():
 
 def _show_export_checklist(parent: tk.Widget, flat_rows: list) -> tuple | None:
     if not flat_rows:
+        # Return all keys from an empty row — fall back to _ALL_EXPORT_COLS labels
         return ([], [c[0] for c in _ALL_EXPORT_COLS])
+
+    # ── Derive column list dynamically from the actual export dicts ─────
+    # Preserve insertion order; first row's keys represent all columns.
+    all_col_keys: list[str] = list(flat_rows[0].keys())
+
+    # Build (col_name, width_px, is_monetary) for each column.
+    # Known monetary columns from _ALL_EXPORT_COLS take precedence; unknown
+    # custom columns default to (180 px, non-monetary).
+    _known_col_info: dict[str, tuple[int, bool]] = {
+        c[0]: (c[1], c[2]) for c in _ALL_EXPORT_COLS
+    }
+    _checklist_cols: list[tuple[str, int, bool]] = [
+        (k, *_known_col_info.get(k, (180, False)))
+        for k in all_col_keys
+    ]
+
+    # Preview table shows the first N columns to keep it readable.
+    _PREVIEW_MAX = 18
+    _preview_cols = _checklist_cols[:_PREVIEW_MAX]
 
     _apply_checklist_tree_style()
 
@@ -355,7 +375,7 @@ def _show_export_checklist(parent: tk.Widget, flat_rows: list) -> tuple | None:
 
     result = [None]
     checked:     dict[str, bool] = {str(i): True for i in range(len(flat_rows))}
-    col_checked: dict[str, bool] = {c[0]: True for c in _ALL_EXPORT_COLS}
+    col_checked: dict[str, bool] = {c[0]: True for c in _checklist_cols}
 
     hdr = tk.Frame(win, bg=NAVY_DEEP)
     hdr.pack(fill="x")
@@ -374,7 +394,7 @@ def _show_export_checklist(parent: tk.Widget, flat_rows: list) -> tuple | None:
     def _refresh_count():
         nr = sum(1 for v in checked.values() if v)
         nc = sum(1 for v in col_checked.values() if v)
-        count_var.set(f"{nr} / {len(flat_rows)} rows  ·  {nc} / {len(_ALL_EXPORT_COLS)} cols")
+        count_var.set(f"{nr} / {len(flat_rows)} rows  ·  {nc} / {len(_checklist_cols)} cols")
 
     _refresh_count()
 
@@ -408,7 +428,7 @@ def _show_export_checklist(parent: tk.Widget, flat_rows: list) -> tuple | None:
     _col_vars: dict[str, tk.BooleanVar] = {}
     COLS_PER_ROW = 9
 
-    for idx, (col_key, col_w, is_mon) in enumerate(_ALL_EXPORT_COLS):
+    for idx, (col_key, col_w, is_mon) in enumerate(_checklist_cols):
         var = tk.BooleanVar(value=True)
         _col_vars[col_key] = var
 
@@ -450,7 +470,7 @@ def _show_export_checklist(parent: tk.Widget, flat_rows: list) -> tuple | None:
              insertbackground=NAVY_MID, width=24).pack(side="left", pady=6, ipady=3)
 
     CHECK_COL = "#check"
-    TCOLS     = [CHECK_COL] + [c[0] for c in _CHECKLIST_PREVIEW_COLS]
+    TCOLS     = [CHECK_COL] + [c[0] for c in _preview_cols]
 
     tbl_outer = tk.Frame(win, bg=BORDER_LIGHT)
     tbl_outer.pack(fill="both", expand=True, padx=16, pady=(6, 0))
@@ -483,7 +503,7 @@ def _show_export_checklist(parent: tk.Widget, flat_rows: list) -> tuple | None:
 
     tree.heading(CHECK_COL, text="☑ All", command=_header_toggle)
     tree.column(CHECK_COL, width=62, minwidth=50, anchor="center", stretch=False)
-    for col_name, col_w, is_mon in _CHECKLIST_PREVIEW_COLS:
+    for col_name, col_w, is_mon in _preview_cols:
         tree.heading(col_name, text=col_name)
         tree.column(col_name, width=col_w, minwidth=50,
                     anchor="e" if is_mon else "w", stretch=False)
@@ -497,7 +517,7 @@ def _show_export_checklist(parent: tk.Widget, flat_rows: list) -> tuple | None:
 
     def _row_values(idx: int, row_dict: dict) -> list:
         vals = ["☑" if checked[str(idx)] else "☐"]
-        for col_name, _, is_mon in _CHECKLIST_PREVIEW_COLS:
+        for col_name, _, is_mon in _preview_cols:
             raw = row_dict.get(col_name, "")
             if is_mon:
                 vals.append(_checklist_fmt_currency(raw))
@@ -518,7 +538,7 @@ def _show_export_checklist(parent: tk.Widget, flat_rows: list) -> tuple | None:
             if term:
                 haystack = " ".join(
                     str(row_dict.get(c, "") or "").lower()
-                    for c, _, __ in _CHECKLIST_PREVIEW_COLS)
+                    for c, _, __ in _preview_cols)
                 if term not in haystack:
                     continue
             _visible_iids.append(iid)
@@ -569,7 +589,7 @@ def _show_export_checklist(parent: tk.Widget, flat_rows: list) -> tuple | None:
     def _on_export():
         selected_rows = [flat_rows[int(i)]
                          for i in sorted(checked, key=int) if checked[i]]
-        selected_cols = [c[0] for c in _ALL_EXPORT_COLS if col_checked.get(c[0], True)]
+        selected_cols = [c[0] for c in _checklist_cols if col_checked.get(c[0], True)]
         result[0] = (selected_rows, selected_cols); win.destroy()
 
     def _on_cancel():
@@ -1501,23 +1521,27 @@ def _apply_tree_style():
 # ═══════════════════════════════════════════════════════════════════════
 
 # Columns available in the advanced filter (real DB cols only, user-facing)
-_ADV_FILTER_COLS = [
-    ("applicant_name",   "Applicant Name"),
-    ("client_id",        "Client ID"),
-    ("pn",               "PN"),
-    ("industry_name",    "Industry Name"),
-    ("residence_address","Residence Address"),
-    ("office_address",   "Office Address"),
-    ("loan_status",      "Loan Status"),
-    ("ao_name",          "AO Name"),
-    ("branch",           "Branch"),
-    ("loan_class_name",  "Loan Class"),
-    ("product_name",     "Product Name"),
-    ("maturity",         "Maturity"),
-    ("interest_rate",    "Interest Rate"),
-    ("term_unit",        "Term Unit"),
-    ("release_tag",      "Release Tag"),
+# Base static columns — virtual cols (derived from results_json) are excluded
+# because they cannot be filtered via SQL WHERE.
+_ADV_FILTER_COLS_BASE = [
+    (db_col, label)
+    for db_col, label, _w, _m, _t in TABLE_COLS
+    if db_col not in _VIRTUAL_COLS
 ]
+
+def _get_adv_filter_cols() -> list[tuple[str, str]]:
+    """
+    Return the full list of filterable columns:
+    all real TABLE_COLS (excluding virtual ones) + any custom DB columns.
+    Called at dialog-open time so new columns appear automatically.
+    """
+    cols = list(_ADV_FILTER_COLS_BASE)
+    try:
+        for db_col, display_label, _cid in _db_get_custom_columns():
+            cols.append((db_col, display_label))
+    except Exception:
+        pass
+    return cols
 
 
 def _open_advanced_filter(self):
@@ -1581,7 +1605,9 @@ def _open_advanced_filter(self):
 
     current = getattr(self, "_sum_adv_filters", {})
 
-    for i, (db_col, label) in enumerate(_ADV_FILTER_COLS):
+    _adv_filter_cols = _get_adv_filter_cols()
+
+    for i, (db_col, label) in enumerate(_adv_filter_cols):
         row_bg = ROW_BG_EVEN if i % 2 == 0 else ROW_BG_ODD
         row_f  = tk.Frame(rows_frame, bg=row_bg,
                           highlightbackground=BORDER_LIGHT, highlightthickness=1)
@@ -1667,7 +1693,7 @@ def _open_advanced_filter(self):
         n = len(new_filters)
         if n:
             cols_used = ", ".join(
-                label for db_col, label in _ADV_FILTER_COLS
+                label for db_col, label in _adv_filter_cols
                 if db_col in new_filters)
             self._sum_adv_filter_lbl.config(
                 text=f"⧉ {n} filter(s): {cols_used}")
@@ -5027,7 +5053,7 @@ def _get_all_filtered_rows(self) -> list:
     return [dict(r) for r in rows]
 
 
-def _row_to_export_dict(row: dict) -> dict:
+def _row_to_export_dict(row: dict, custom_cols: list | None = None) -> dict:
     def _fmt(val):
         try:
             return float(val) if val not in (None, "") else None
@@ -5050,7 +5076,7 @@ def _row_to_export_dict(row: dict) -> dict:
     if amort_hist is None:
         amort_hist = _parse_amort_history_total(row.get("results_json", ""))
 
-    return {
+    export = {
         "Client ID":                           row.get("client_id",          "") or "",
         "PN":                                  row.get("pn",                 "") or "",
         "Applicant":                           row.get("applicant_name",     "") or "",
@@ -5089,6 +5115,13 @@ def _row_to_export_dict(row: dict) -> dict:
         "AO Name":                             row.get("ao_name",            "") or "",
     }
 
+    # ── Append any custom extraction columns (passed in to avoid per-row DB calls)
+    if custom_cols:
+        for db_col, display_label, _cid in custom_cols:
+            export[display_label] = str(row.get(db_col, "") or "")
+
+    return export
+
 
 def _export_csv(self):
     rows = _get_all_filtered_rows(self)
@@ -5100,7 +5133,11 @@ def _export_csv(self):
         initialfile=f"LookUp_Summary_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv")
     if not path:
         return
-    flat    = [_row_to_export_dict(r) for r in rows]
+    try:
+        custom_cols = _db_get_custom_columns()
+    except Exception:
+        custom_cols = []
+    flat    = [_row_to_export_dict(r, custom_cols) for r in rows]
     headers = list(flat[0].keys()) if flat else []
     try:
         with open(path, "w", newline="", encoding="utf-8-sig") as f:
@@ -5118,7 +5155,12 @@ def _export_excel(self):
         messagebox.showinfo("Export", "No records to export.")
         return
 
-    flat = [_row_to_export_dict(r) for r in rows]
+    try:
+        custom_cols = _db_get_custom_columns()
+    except Exception:
+        custom_cols = []
+
+    flat = [_row_to_export_dict(r, custom_cols) for r in rows]
     if not flat:
         return
 
@@ -5146,7 +5188,9 @@ def _export_excel(self):
             from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
             from openpyxl.utils import get_column_letter
 
-            all_possible_headers = [c[0] for c in _ALL_EXPORT_COLS]
+            # headers = selected columns in the order the user checked them,
+            # preserving the order from the export dict (all_col_keys).
+            all_possible_headers = list(flat[0].keys()) if flat else []
             selected_set         = set(selected_col_keys)
             headers              = [h for h in all_possible_headers
                                     if h in selected_set]
@@ -6869,4 +6913,4 @@ def _open_add_doc_dialog(self):
 
 def attach(cls):
     cls._build_lookup_summary_panel = _build_lookup_summary_panel
-    cls.lookup_summary_notify        = lookup_summary_notify
+    cls.lookup_summary_notify        = lookup_summary_notify    
